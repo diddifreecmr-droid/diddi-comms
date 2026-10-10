@@ -15,6 +15,8 @@ Start here:
 - `docs/IMPLEMENTATION_PLAN_PERSONAS_JOURNEYS_SPECS.md` turns the architecture
   into personas, user journeys, product specs, and implementation phases.
 - `docs/SPRINT_PLAN_DIDDICOMMS_MVP.md` breaks the MVP into execution sprints.
+- `docs/PORTAINER_ENV_AND_DIDDIGO.md` documents the Portainer environment and
+  DiddiGo resolver wiring.
 - `docs/PHASE_0_SPEC_QUESTIONS.md` contains the open questions to freeze before
   scaffolding the Phase 0 service foundation.
 
