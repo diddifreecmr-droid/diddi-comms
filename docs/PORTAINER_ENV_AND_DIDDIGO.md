@@ -9,7 +9,7 @@ Stack:
 - Repository: `https://github.com/diddifreecmr-droid/diddi-comms.git`
 - Reference: `refs/heads/main`
 - Compose path: `docker-compose.portainer.yml`
-- Public API: `https://messaging.diddifree.com` or `http://169.58.70.37:8040`
+- Public API: `https://messaging.diddifree.com`
 
 Configured environment keys:
 
@@ -88,11 +88,11 @@ Current integration signal:
 After Portainer redeploy:
 
 ```bash
-curl http://169.58.70.37:8040/health
-curl http://169.58.70.37:8040/ready
-curl http://169.58.70.37:8040/comms/v1/ping
+curl https://messaging.diddifree.com/health
+curl https://messaging.diddifree.com/ready
+curl https://messaging.diddifree.com/comms/v1/ping
 curl -H "Authorization: Bearer $METRICS_BEARER_TOKEN" \
-  http://169.58.70.37:8040/internal/metrics
+  https://messaging.diddifree.com/internal/metrics
 ```
 
 After DiddiGo route deployment:
@@ -102,4 +102,3 @@ curl -H "Authorization: Bearer $DIDDICOMMS_TO_DIDDIGO_TOKEN" \
   -H "X-Client-ID: diddicomms-staging-diddigo" \
   https://go-staging.diddifree.com/internal/v1/comms/tasks/ride/<ride-id>
 ```
-
