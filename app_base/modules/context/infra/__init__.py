@@ -1,0 +1,2 @@
+"""Context resolver HTTP adapters."""
+

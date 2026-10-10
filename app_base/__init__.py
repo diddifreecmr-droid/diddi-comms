@@ -1,0 +1,2 @@
+"""DiddiComms application package."""
+

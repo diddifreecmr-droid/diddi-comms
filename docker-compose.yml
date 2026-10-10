@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: diddicomms_local
+      POSTGRES_USER: diddicomms
+      POSTGRES_PASSWORD: diddicomms
+    ports:
+      - "15442:5432"
+    volumes:
+      - diddicomms-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diddicomms -d diddicomms_local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16442:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - diddicomms-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://diddicomms:diddicomms@postgres:5432/diddicomms_local
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://diddicomms:diddicomms@postgres:5432/diddicomms_local
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8040:8040"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  diddicomms-postgres:
+  diddicomms-redis:
+
