@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DIDDICOMMS_POSTGRES_DB:-diddicomms}
+      POSTGRES_USER: ${DIDDICOMMS_POSTGRES_USER:-diddicomms}
+      POSTGRES_PASSWORD: ${DIDDICOMMS_POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - diddicomms-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DIDDICOMMS_POSTGRES_USER:-diddicomms} -d ${DIDDICOMMS_POSTGRES_DB:-diddicomms}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - diddicomms-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && uvicorn app_base.main:app --host 0.0.0.0 --port 8040",
+      ]
+    environment:
+      APP_NAME: DiddiComms
+      ENVIRONMENT: ${ENVIRONMENT:-staging}
+      API_PREFIX: /comms/v1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${DIDDICOMMS_POSTGRES_USER:-diddicomms}:${DIDDICOMMS_POSTGRES_PASSWORD:-change-me}@postgres:5432/${DIDDICOMMS_POSTGRES_DB:-diddicomms}
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://${DIDDICOMMS_POSTGRES_USER:-diddicomms}:${DIDDICOMMS_POSTGRES_PASSWORD:-change-me}@postgres:5432/${DIDDICOMMS_POSTGRES_DB:-diddicomms}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: diddicomms
+      IDENTITY_ISSUER: ${IDENTITY_ISSUER:-diddifree-id}
+      IDENTITY_AUDIENCE: diddicomms
+      IDENTITY_JWKS_URL: ${IDENTITY_JWKS_URL}
+      IDENTITY_SERVICE_TOKEN_URL: ${IDENTITY_SERVICE_TOKEN_URL}
+      METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN}
+      OWNER_SERVICE_RESOLVERS_JSON: ${OWNER_SERVICE_RESOLVERS_JSON:-{}}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    ports:
+      - "${DIDDICOMMS_API_PORT:-8040}:8040"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  diddicomms-postgres:
+  diddicomms-redis:

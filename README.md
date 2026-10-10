@@ -34,3 +34,15 @@ Useful endpoints:
 - `GET /comms/v1/ping`
 - `GET /internal/metrics` with
   `Authorization: Bearer local-dev-metrics-token`
+
+## Portainer
+
+Use `docker-compose.portainer.yml` when creating the stack from Git.
+
+Recommended stack settings:
+
+- Name: `diddicomms`
+- Repository: `https://github.com/diddifreecmr-droid/diddi-comms.git`
+- Reference: `refs/heads/main`
+- Compose path: `docker-compose.portainer.yml`
+- Environment: `diddifree-prod`
