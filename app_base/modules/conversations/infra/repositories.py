@@ -12,6 +12,7 @@ from app_base.modules.conversations.infra.models import (
     ConversationModel,
     ConversationParticipantModel,
     MessageModel,
+    SupportCaseModel,
 )
 
 
@@ -59,6 +60,34 @@ class ConversationRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def has_active_participant(self, *, conversation_id: UUID, user_id: UUID) -> bool:
+        result = await self.session.execute(
+            select(ConversationParticipantModel.id).where(
+                ConversationParticipantModel.conversation_id == conversation_id,
+                ConversationParticipantModel.user_id == user_id,
+                ConversationParticipantModel.left_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    def add_participant(
+        self,
+        *,
+        conversation_id: UUID,
+        user_id: UUID,
+        role: str,
+        permissions: str = "member",
+    ) -> ConversationParticipantModel:
+        participant = ConversationParticipantModel(
+            id=uuid4(),
+            conversation_id=conversation_id,
+            user_id=user_id,
+            role=role,
+            permissions=permissions,
+        )
+        self.session.add(participant)
+        return participant
 
 
 def build_task_conversation(
@@ -136,3 +165,52 @@ class MessageRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+
+class SupportCaseRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def find_by_id(self, case_id: UUID) -> SupportCaseModel | None:
+        return await self.session.get(SupportCaseModel, case_id)
+
+    async def list_cases(
+        self,
+        *,
+        status: str | None = None,
+        owner_service: str | None = None,
+        limit: int = 100,
+    ) -> list[SupportCaseModel]:
+        statement = select(SupportCaseModel).order_by(SupportCaseModel.created_at.desc()).limit(limit)
+        if status:
+            statement = statement.where(SupportCaseModel.status == status)
+        if owner_service:
+            statement = statement.where(SupportCaseModel.owner_service == owner_service)
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    def add_case(
+        self,
+        *,
+        case_id: UUID,
+        conversation_id: UUID,
+        requester_user_id: UUID,
+        subject: str,
+        priority: str,
+        owner_service: str | None = None,
+        task_type: str | None = None,
+        task_id: UUID | None = None,
+    ) -> SupportCaseModel:
+        case = SupportCaseModel(
+            id=case_id,
+            conversation_id=conversation_id,
+            requester_user_id=requester_user_id,
+            owner_service=owner_service,
+            task_type=task_type,
+            task_id=task_id,
+            subject=subject,
+            status="open",
+            priority=priority,
+        )
+        self.session.add(case)
+        return case

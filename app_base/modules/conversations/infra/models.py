@@ -99,3 +99,35 @@ class MessageDeliveryModel(Base):
     attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provider_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SupportCaseModel(Base):
+    __tablename__ = "support_cases"
+    __table_args__ = (
+        Index("ix_support_cases_status_priority", "status", "priority"),
+        Index("ix_support_cases_requester", "requester_user_id"),
+        Index("ix_support_cases_assignee", "assigned_to_user_id"),
+        Index("ix_support_cases_task_reference", "owner_service", "task_type", "task_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    conversation_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    requester_user_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    owner_service: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
+    priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="normal")
+    assigned_to_user_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    assigned_by_service: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by_service: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -6,6 +6,7 @@ from app_base.modules.conversations.infra.models import (
     ConversationParticipantModel,
     MessageDeliveryModel,
     MessageModel,
+    SupportCaseModel,
 )
 from app_base.modules.events.infra.models import OutboxEventModel, ProcessedEventModel
 
@@ -15,6 +16,7 @@ __all__ = [
     "ConversationParticipantModel",
     "MessageDeliveryModel",
     "MessageModel",
+    "SupportCaseModel",
     "OutboxEventModel",
     "ProcessedEventModel",
 ]
