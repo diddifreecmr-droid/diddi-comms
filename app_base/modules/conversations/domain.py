@@ -52,6 +52,17 @@ class ConversationAccessPolicy:
         ConversationState.CLOSED,
         ConversationState.SUSPENDED,
     }
+    terminal_task_states = {
+        "canceled",
+        "cancelled",
+        "closed",
+        "completed",
+        "done",
+        "expired",
+        "finished",
+        "rejected",
+        "terminated",
+    }
 
     def decide(
         self,
@@ -96,6 +107,10 @@ class ConversationAccessPolicy:
         if action == CommunicationAction.CALL and not context.calling_allowed:
             return AccessDecision.deny("CALLING_NOT_ALLOWED_BY_OWNER")
 
+        terminal_decision = self._terminal_state_allows_action(context, action)
+        if not terminal_decision.allowed:
+            return terminal_decision
+
         if (
             action != CommunicationAction.READ_HISTORY
             and context.closes_at is not None
@@ -134,6 +149,20 @@ class ConversationAccessPolicy:
             return AccessDecision.allow()
         if closes_at is not None and now >= _ensure_aware(closes_at):
             return AccessDecision.deny("CONVERSATION_WINDOW_CLOSED")
+        return AccessDecision.allow()
+
+    def _terminal_state_allows_action(
+        self,
+        context: CommunicationContext,
+        action: CommunicationAction,
+    ) -> AccessDecision:
+        if action == CommunicationAction.READ_HISTORY:
+            return AccessDecision.allow()
+        normalized_state = context.state.strip().lower().replace("-", "_")
+        if normalized_state not in self.terminal_task_states:
+            return AccessDecision.allow()
+        if context.closes_at is None:
+            return AccessDecision.deny("TASK_TERMINAL_STATE_REQUIRES_COMMUNICATION_WINDOW")
         return AccessDecision.allow()
 
 

@@ -154,9 +154,51 @@ def test_policy_allows_history_read_after_window_closes_for_participant() -> Non
     assert decision.allowed is True
 
 
+def test_policy_rejects_message_after_terminal_task_state_without_owner_window() -> None:
+    decision = ConversationAccessPolicy().decide(
+        action=CommunicationAction.MESSAGE,
+        actor_user_id=PASSENGER_ID,
+        target_user_id=DRIVER_ID,
+        context=_context(state="cancelled", closes_at=None),
+        conversation=_conversation(),
+        now=NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "TASK_TERMINAL_STATE_REQUIRES_COMMUNICATION_WINDOW"
+
+
+def test_policy_allows_message_after_terminal_task_state_inside_owner_window() -> None:
+    decision = ConversationAccessPolicy().decide(
+        action=CommunicationAction.MESSAGE,
+        actor_user_id=PASSENGER_ID,
+        target_user_id=DRIVER_ID,
+        context=_context(state="completed", closes_at=NOW + timedelta(hours=24)),
+        conversation=_conversation(),
+        now=NOW,
+    )
+
+    assert decision.allowed is True
+
+
+def test_policy_rejects_message_after_terminal_task_state_when_owner_window_passed() -> None:
+    decision = ConversationAccessPolicy().decide(
+        action=CommunicationAction.MESSAGE,
+        actor_user_id=PASSENGER_ID,
+        target_user_id=DRIVER_ID,
+        context=_context(state="completed", closes_at=NOW),
+        conversation=_conversation(),
+        now=NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "TASK_COMMUNICATION_WINDOW_CLOSED"
+
+
 def _context(
     *,
     task_id: UUID = TASK_ID,
+    state: str = "driver_assigned",
     messaging_allowed: bool = True,
     calling_allowed: bool = True,
     closes_at: datetime | None = None,
@@ -168,7 +210,7 @@ def _context(
                 "task_type": "ride",
                 "task_id": str(task_id),
             },
-            "state": "driver_assigned",
+            "state": state,
             "version": 12,
             "participants": [
                 {"user_id": str(PASSENGER_ID), "role": "passenger", "phone_e164": "+237600000001"},
