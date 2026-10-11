@@ -31,7 +31,7 @@ async def require_current_user(
     if not authorization or not authorization.startswith("Bearer "):
         raise ApiError(401, "TOKEN_MISSING", "Authentication is required.")
     token = authorization.removeprefix("Bearer ").strip()
-    claims = FreeIDTokenVerifier().verify(token)
+    claims = FreeIDTokenVerifier(require_audience=False).verify(token)
     if claims.token_type == "service" or claims.subject.startswith("service:"):
         raise ApiError(403, "USER_TOKEN_REQUIRED", "A user token is required.")
     try:
