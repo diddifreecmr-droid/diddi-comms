@@ -159,11 +159,17 @@ class ConversationAccessPolicy:
         if action == CommunicationAction.READ_HISTORY:
             return AccessDecision.allow()
         normalized_state = context.state.strip().lower().replace("-", "_")
-        if normalized_state not in self.terminal_task_states:
+        if not self._is_terminal_task_state(normalized_state):
             return AccessDecision.allow()
         if context.closes_at is None:
             return AccessDecision.deny("TASK_TERMINAL_STATE_REQUIRES_COMMUNICATION_WINDOW")
         return AccessDecision.allow()
+
+    def _is_terminal_task_state(self, normalized_state: str) -> bool:
+        return any(
+            normalized_state == terminal_state or normalized_state.startswith(f"{terminal_state}_")
+            for terminal_state in self.terminal_task_states
+        )
 
 
 def _participant_for(context: CommunicationContext, user_id: UUID) -> CommunicationParticipant | None:

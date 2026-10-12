@@ -168,6 +168,20 @@ def test_policy_rejects_message_after_terminal_task_state_without_owner_window()
     assert decision.reason_code == "TASK_TERMINAL_STATE_REQUIRES_COMMUNICATION_WINDOW"
 
 
+def test_policy_rejects_message_after_qualified_cancelled_state_without_owner_window() -> None:
+    decision = ConversationAccessPolicy().decide(
+        action=CommunicationAction.MESSAGE,
+        actor_user_id=PASSENGER_ID,
+        target_user_id=DRIVER_ID,
+        context=_context(state="cancelled_by_passenger", closes_at=None),
+        conversation=_conversation(),
+        now=NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "TASK_TERMINAL_STATE_REQUIRES_COMMUNICATION_WINDOW"
+
+
 def test_policy_allows_message_after_terminal_task_state_inside_owner_window() -> None:
     decision = ConversationAccessPolicy().decide(
         action=CommunicationAction.MESSAGE,
