@@ -14,6 +14,7 @@ from app_base.core.security import require_metrics_token
 from app_base.core.settings import settings
 from app_base.modules.conversations.presentation.router import router as conversations_router
 from app_base.modules.platform.presentation.router import router as platform_router
+from app_base.modules.realtime.router import router as realtime_router
 
 configure_logging(settings.log_level)
 
@@ -26,6 +27,7 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 
 app.include_router(platform_router, prefix=settings.api_prefix)
 app.include_router(conversations_router, prefix=settings.api_prefix)
+app.include_router(realtime_router, prefix=settings.api_prefix)
 
 
 @app.get("/health")
