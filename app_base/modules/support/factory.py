@@ -31,6 +31,7 @@ def diddisupport_read_client(config: Settings = settings) -> DiddiSupportReadCli
             base_url=str(config.diddisupport_base_url),
             client_id=str(config.diddisupport_client_id),
             scope=config.diddisupport_scope,
+            create_scope=config.diddisupport_create_scope,
             service_token_client=token_client,
         ),
         timeout_seconds=config.identity_http_timeout_seconds,

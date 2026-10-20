@@ -25,17 +25,25 @@ Both calls use `Authorization: Bearer <service-token>`, `X-Client-ID`, and
 `X-Request-ID`. The token must target audience `diddi-support`, subject
 `service:diddicomms`, and scope `diddi-support:cases:read`.
 
-## Still required for case creation
+## Case creation implemented in DiddiComms
 
-The Support write contract is separate and is not implemented by this read
-client. It must define how the DiddiComms AI creates a case, including:
+The DiddiComms public route `POST /comms/v1/support/cases` now creates the
+Support case through:
 
-- the create route and payload;
+`POST /support/v1/internal/cases`
+
+It sends the required resource reference, reporter, category, subject,
+priority, request ID, service token, and idempotency key. The returned Support
+`case_id` is used to link the DiddiComms conversation projection.
+
+The Support contract requires:
+
 - authorization for `service:diddicomms`;
-- idempotency and the returned `case_id`.
+- idempotency by `Idempotency-Key`;
+- a returned `case_id`.
 
-DiddiComms must store only the returned case reference while continuing to own
-the support conversation and its messages.
+DiddiComms stores the returned case reference to link its conversation. The
+Support service remains the source of truth for the case lifecycle.
 
 ## Authentication errors
 

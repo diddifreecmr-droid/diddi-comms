@@ -34,6 +34,8 @@ def support_user_client(monkeypatch):
         requester_user_id,
         subject,
         priority="normal",
+        category="general",
+        origin_report_id=None,
         initial_message=None,
         task=None,
         request_id=None,
@@ -42,6 +44,8 @@ def support_user_client(monkeypatch):
         assert requester_user_id == REQUESTER_ID
         assert subject == "Ride problem"
         assert priority == "high"
+        assert category == "general"
+        assert origin_report_id is None
         assert initial_message == "The driver is not moving"
         assert task.owner_service == "diddigo"
         assert task.task_type == "ride"

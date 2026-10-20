@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     diddisupport_client_secret: str | None = None
     diddisupport_audience: str = "diddi-support"
     diddisupport_scope: str = "diddi-support:cases:read"
+    diddisupport_create_scope: str = "diddi-support:cases:create"
 
     owner_service_resolvers_json: str = "{}"
 

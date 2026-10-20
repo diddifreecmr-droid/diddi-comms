@@ -1,3 +1,4 @@
+import json
 from uuid import UUID
 
 import httpx
@@ -102,3 +103,46 @@ async def test_maps_support_errors() -> None:
 
     assert exc.value.status_code == 503
     assert exc.value.code == "DIDDISUPPORT_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_creates_case_with_contract_payload_and_idempotency() -> None:
+    seen: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen
+        seen = request
+        return httpx.Response(
+            201,
+            json={"case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa", "status": "open"},
+        )
+
+    client, token_client = make_client(handler)
+    result = await client.create_case(
+        origin_service="diddigo",
+        resource_type="ride",
+        resource_id=UUID("11111111-1111-1111-1111-111111111111"),
+        origin_report_id="comms-report-123",
+        reporter_user_id=UUID("22222222-2222-2222-2222-222222222222"),
+        category="ride_issue",
+        subject="Problème pendant la course",
+        priority="normal",
+        idempotency_key="support-case-123",
+    )
+
+    assert token_client.scopes == ["diddi-support:cases:create"]
+    assert seen is not None
+    assert seen.url.path == "/support/v1/internal/cases"
+    assert seen.headers["Idempotency-Key"] == "support-case-123"
+    assert seen.headers["X-Request-ID"]
+    assert json.loads(seen.content) == {
+        "origin_service": "diddigo",
+        "resource_type": "ride",
+        "resource_id": "11111111-1111-1111-1111-111111111111",
+        "origin_report_id": "comms-report-123",
+        "reporter_user_id": "22222222-2222-2222-2222-222222222222",
+        "category": "ride_issue",
+        "subject": "Problème pendant la course",
+        "priority": "normal",
+    }
+    assert result.case_id == UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa")

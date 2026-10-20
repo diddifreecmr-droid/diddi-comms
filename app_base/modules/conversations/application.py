@@ -26,6 +26,8 @@ from app_base.modules.conversations.infra.repositories import (
 )
 from app_base.modules.events.application import OutboxWriter
 from app_base.modules.events.domain import OutboxEventDraft
+from app_base.modules.support.factory import diddisupport_read_client
+from app_base.modules.support.read_client import DiddiSupportReadClient
 
 
 class TaskResolver(Protocol):
@@ -366,6 +368,7 @@ class SupportCaseService:
         *,
         resolver_factory: ResolverFactory = resolver_for_owner,
         policy: ConversationAccessPolicy | None = None,
+        support_client: DiddiSupportReadClient | None = None,
     ) -> None:
         self.session = session
         self.resolver_factory = resolver_factory
@@ -375,6 +378,7 @@ class SupportCaseService:
         self.support_cases = SupportCaseRepository(session)
         self.audit = AuditRecorder(session)
         self.outbox = OutboxWriter(session)
+        self.support_client = support_client
 
     async def open_case(
         self,
@@ -382,6 +386,8 @@ class SupportCaseService:
         requester_user_id: UUID,
         subject: str,
         priority: str = "normal",
+        category: str = "general",
+        origin_report_id: str | None = None,
         initial_message: str | None = None,
         task: TaskReference | None = None,
         request_id: str | None = None,
@@ -403,7 +409,27 @@ class SupportCaseService:
             if not decision.allowed:
                 raise PermissionError(decision.reason_code)
 
-        case_id = uuid4()
+        if task is None:
+            raise ValueError("SUPPORT_RESOURCE_REFERENCE_REQUIRED")
+
+        if not idempotency_key:
+            raise ValueError("IDEMPOTENCY_KEY_REQUIRED")
+
+        support_client = self.support_client or diddisupport_read_client()
+        remote_case = await support_client.create_case(
+            origin_service=task.owner_service,
+            resource_type=task.task_type,
+            resource_id=task.task_id,
+            origin_report_id=origin_report_id or idempotency_key,
+            reporter_user_id=requester_user_id,
+            category=category,
+            subject=subject,
+            priority=priority,
+            idempotency_key=idempotency_key,
+            request_id=request_id,
+        )
+
+        case_id = remote_case.case_id
         conversation_id = uuid4()
         conversation = ConversationModel(
             id=conversation_id,

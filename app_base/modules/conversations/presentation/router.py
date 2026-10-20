@@ -99,6 +99,8 @@ class OpenSupportCaseRequest(BaseModel):
     subject: str = Field(min_length=1, max_length=200)
     initial_message: str | None = Field(default=None, max_length=2000)
     priority: str = Field(default="normal", max_length=20)
+    category: str = Field(default="general", min_length=1, max_length=80)
+    origin_report_id: str | None = Field(default=None, max_length=120)
     owner_service: str | None = Field(default=None, max_length=80)
     task_type: str | None = Field(default=None, max_length=80)
     task_id: UUID | None = None
@@ -327,6 +329,8 @@ async def open_support_case(
             requester_user_id=current_user.user_id,
             subject=payload.subject,
             priority=payload.priority,
+            category=payload.category,
+            origin_report_id=payload.origin_report_id,
             initial_message=payload.initial_message,
             task=task,
             request_id=getattr(request.state, "request_id", None),
@@ -335,7 +339,10 @@ async def open_support_case(
     except PermissionError as exc:
         raise ApiError(403, str(exc), "User is not allowed to open support for this task.") from exc
     except ValueError as exc:
-        raise ApiError(422, str(exc), "Support case payload is invalid.") from exc
+        code = str(exc)
+        if code == "IDEMPOTENCY_KEY_REQUIRED":
+            raise ApiError(400, code, "Idempotency-Key is required.") from exc
+        raise ApiError(422, code, "Support case payload is invalid.") from exc
     return _support_case_response(result.case)
 
 
