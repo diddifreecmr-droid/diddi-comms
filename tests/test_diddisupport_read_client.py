@@ -146,3 +146,40 @@ async def test_creates_case_with_contract_payload_and_idempotency() -> None:
         "priority": "normal",
     }
     assert result.case_id == UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa")
+
+
+@pytest.mark.asyncio
+async def test_sends_user_message_with_visibility_and_idempotency() -> None:
+    seen: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen
+        seen = request
+        return httpx.Response(
+            201,
+            json={
+                "message_id": "cccccccc-3333-3333-3333-cccccccccccc",
+                "case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+                "visibility": "user_visible",
+            },
+        )
+
+    client, token_client = make_client(handler)
+    result = await client.send_user_message(
+        case_id=UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"),
+        author_id=UUID("22222222-2222-2222-2222-222222222222"),
+        body="Le problème continue.",
+        idempotency_key="support-message-1",
+    )
+
+    assert token_client.scopes == ["diddi-support:messages:write"]
+    assert seen is not None
+    assert seen.url.path == "/support/v1/internal/cases/aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa/messages"
+    assert seen.headers["Idempotency-Key"] == "support-message-1"
+    assert json.loads(seen.content) == {
+        "author_type": "user",
+        "author_id": "22222222-2222-2222-2222-222222222222",
+        "visibility": "user_visible",
+        "body": "Le problème continue.",
+    }
+    assert result.message_id == UUID("cccccccc-3333-3333-3333-cccccccccccc")

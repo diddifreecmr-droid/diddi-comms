@@ -13,6 +13,7 @@ def test_phase_zero_contract_defaults() -> None:
     assert settings.diddisupport_audience == "diddi-support"
     assert settings.diddisupport_scope == "diddi-support:cases:read"
     assert settings.diddisupport_create_scope == "diddi-support:cases:create"
+    assert settings.diddisupport_messages_scope == "diddi-support:messages:write"
 
 
 def test_production_rejects_local_metrics_token() -> None:

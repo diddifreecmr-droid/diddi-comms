@@ -44,6 +44,14 @@ class SupportCaseCreateResponse(BaseModel):
     created_at: datetime | None = None
 
 
+class SupportMessageResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    message_id: UUID = Field(validation_alias=AliasChoices("message_id", "id"))
+    case_id: UUID | None = None
+    visibility: str = "user_visible"
+
+
 @dataclass(frozen=True)
 class DiddiSupportReadConfig:
     base_url: str
@@ -51,6 +59,7 @@ class DiddiSupportReadConfig:
     scope: str
     service_token_client: ServiceTokenClient
     create_scope: str = "diddi-support:cases:create"
+    messages_scope: str = "diddi-support:messages:write"
 
 
 class DiddiSupportReadClient:
@@ -149,6 +158,54 @@ class DiddiSupportReadClient:
         except (TypeError, ValueError) as exc:
             raise ApiError(
                 502, "DIDDISUPPORT_INVALID_RESPONSE", "DiddiSupport returned an invalid case response."
+            ) from exc
+
+    async def send_user_message(
+        self,
+        *,
+        case_id: UUID,
+        author_id: UUID,
+        body: str,
+        idempotency_key: str,
+        request_id: str | None = None,
+    ) -> SupportMessageResponse:
+        token = await self.config.service_token_client.access_token(self.config.messages_scope)
+        headers = self._headers(token, request_id=request_id)
+        headers["Idempotency-Key"] = idempotency_key
+        payload = {
+            "author_type": "user",
+            "author_id": str(author_id),
+            "visibility": "user_visible",
+            "body": body,
+        }
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.config.base_url.rstrip("/"),
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response = await client.post(
+                    f"/support/v1/internal/cases/{case_id}/messages",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                response_body = response.json()
+            return SupportMessageResponse.model_validate(response_body)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 409:
+                raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The Support message idempotency key conflicts.") from exc
+            if status == 404:
+                raise ApiError(404, "CASE_NOT_FOUND", "The Support case was not found.") from exc
+            if status == 503:
+                raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
+            raise ApiError(502, "DIDDISUPPORT_REQUEST_REJECTED", "DiddiSupport rejected the message.") from exc
+        except httpx.RequestError as exc:
+            raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
+        except (TypeError, ValueError) as exc:
+            raise ApiError(
+                502, "DIDDISUPPORT_INVALID_RESPONSE", "DiddiSupport returned an invalid message response."
             ) from exc
 
     async def _get(self, path: str) -> dict[str, Any]:
