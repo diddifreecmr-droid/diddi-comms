@@ -10,6 +10,8 @@ def test_phase_zero_contract_defaults() -> None:
     assert settings.api_prefix == "/comms/v1"
     assert settings.identity_audience == "diddicomms"
     assert settings.identity_issuer == "diddifree-id"
+    assert settings.diddisupport_audience == "diddi-support"
+    assert settings.diddisupport_scope == "diddi-support:cases:read"
 
 
 def test_production_rejects_local_metrics_token() -> None:

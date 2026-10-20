@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     identity_service_token_url: str | None = None
     identity_http_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
 
+    diddisupport_base_url: str | None = None
+    diddisupport_client_id: str | None = None
+    diddisupport_client_secret: str | None = None
+    diddisupport_audience: str = "diddi-support"
+    diddisupport_scope: str = "diddi-support:cases:read"
+
     owner_service_resolvers_json: str = "{}"
 
     otel_exporter_otlp_endpoint: str | None = None
