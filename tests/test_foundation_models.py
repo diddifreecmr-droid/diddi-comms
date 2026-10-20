@@ -9,6 +9,7 @@ def test_foundation_models_are_registered() -> None:
     assert "messages" in Base.metadata.tables
     assert "message_deliveries" in Base.metadata.tables
     assert "support_cases" in Base.metadata.tables
+    assert "call_attempts" in Base.metadata.tables
     assert "outbox_events" in Base.metadata.tables
     assert "processed_events" in Base.metadata.tables
 

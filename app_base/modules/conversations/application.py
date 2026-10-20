@@ -153,7 +153,7 @@ class EnsureTaskConversationService:
             OutboxEventDraft(
                 aggregate_type="conversation",
                 aggregate_id=str(draft.conversation.id),
-                event_type="comms.conversation.opened",
+                event_type="comms.conversation.created.v1",
                 correlation_id=request_id,
                 payload={
                     "conversation_id": str(draft.conversation.id),
@@ -214,6 +214,8 @@ class SendMessageService:
             client_message_id=client_message_id,
         )
         if existing is not None:
+            if existing.body != body:
+                raise ValueError("MESSAGE_IDEMPOTENCY_CONFLICT")
             return SendMessageResult(message=existing, created=False)
 
         conversation = await self.conversations.find_by_id(conversation_id)
@@ -262,7 +264,7 @@ class SendMessageService:
                 OutboxEventDraft(
                     aggregate_type="support_case",
                     aggregate_id=str(conversation.task_id),
-                    event_type="comms.support.message.created",
+                    event_type="comms.support.message.created.v1",
                     correlation_id=request_id,
                     payload={
                         "conversation_id": str(conversation.id),
@@ -333,7 +335,7 @@ class SendMessageService:
             OutboxEventDraft(
                 aggregate_type="conversation",
                 aggregate_id=str(conversation.id),
-                event_type="comms.message.created",
+                event_type="comms.message.created.v1",
                 correlation_id=request_id,
                 payload={
                     "conversation_id": str(conversation.id),
@@ -455,7 +457,7 @@ class SupportCaseService:
             OutboxEventDraft(
                 aggregate_type="support_case",
                 aggregate_id=str(case_id),
-                event_type="comms.support.case_opened",
+                event_type="comms.support.case_opened.v1",
                 correlation_id=request_id,
                 payload={
                     "case_id": str(case_id),
@@ -565,7 +567,7 @@ class SupportCaseService:
             OutboxEventDraft(
                 aggregate_type="support_case",
                 aggregate_id=str(case_id),
-                event_type="comms.support.case_resolved",
+                event_type="comms.support.case_resolved.v1",
                 correlation_id=request_id,
                 payload={"case_id": str(case_id)},
             )

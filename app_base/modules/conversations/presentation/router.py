@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app_base.core.auth_deps import AuthenticatedService, AuthenticatedUser, require_current_user, require_service_token
 from app_base.core.database import get_session
 from app_base.core.errors import ApiError
+from app_base.modules.calls.application import CreateCallAttemptService, RecordCallClientResultService
 from app_base.modules.context.domain import TaskReference
 from app_base.modules.conversations.application import (
     EnsureTaskConversationService,
@@ -65,7 +66,31 @@ class MessageResponse(BaseModel):
     client_message_id: str
     body: str
     moderation_status: str
+    delivery_status: str = "pending"
     created: bool | None = None
+
+
+class CallAttemptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_user_id: UUID
+
+
+class CallAttemptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: UUID
+    conversation_id: UUID
+    target_user_id: UUID
+    status: str
+    dial_action: dict[str, str]
+    created: bool
+
+
+class CallClientResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result: str = Field(pattern=r"^(started|cancelled|failed|unknown)$")
 
 
 class OpenSupportCaseRequest(BaseModel):
@@ -187,7 +212,12 @@ async def send_message(
     except PermissionError as exc:
         raise ApiError(403, str(exc), "User is not allowed to send a message.") from exc
     except ValueError as exc:
-        raise ApiError(422, str(exc), "Message payload is invalid.") from exc
+        code = str(exc)
+        raise ApiError(
+            409 if code == "MESSAGE_IDEMPOTENCY_CONFLICT" else 422,
+            code,
+            "Message payload is invalid.",
+        ) from exc
 
     return _message_response(result.message, created=result.created)
 
@@ -207,6 +237,68 @@ async def list_messages(
         limit=min(max(limit, 1), 200),
     )
     return [_message_response(message) for message in messages]
+
+
+@router.post("/conversations/{conversation_id}/call-attempts", response_model=CallAttemptResponse)
+async def create_call_attempt(
+    conversation_id: UUID,
+    payload: CallAttemptRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> CallAttemptResponse:
+    if not idempotency_key:
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    try:
+        result = await CreateCallAttemptService(session).create(
+            conversation_id=conversation_id,
+            actor_user_id=current_user.user_id,
+            target_user_id=payload.target_user_id,
+            idempotency_key=idempotency_key,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Conversation was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(403, str(exc), "User is not allowed to call this participant.") from exc
+    except ValueError as exc:
+        code = str(exc)
+        status_code = 409 if code == "CALL_IDEMPOTENCY_CONFLICT" else 422
+        raise ApiError(status_code, code, "Call request is invalid.") from exc
+    return CallAttemptResponse(
+        attempt_id=result.attempt.id,
+        conversation_id=result.attempt.conversation_id,
+        target_user_id=result.attempt.target_user_id,
+        status=result.attempt.outcome,
+        dial_action={"scheme": "tel", "value": f"tel:{result.target_phone_e164}"},
+        created=result.created,
+    )
+
+
+@router.post("/conversations/{conversation_id}/call-attempts/{attempt_id}/client-result")
+async def record_call_client_result(
+    conversation_id: UUID,
+    attempt_id: UUID,
+    payload: CallClientResultRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    try:
+        attempt = await RecordCallClientResultService(session).record(
+            attempt_id=attempt_id,
+            actor_user_id=current_user.user_id,
+            result=payload.result,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Call attempt was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(403, str(exc), "User is not allowed to update this call attempt.") from exc
+    if attempt.conversation_id != conversation_id:
+        raise ApiError(404, "CALL_ATTEMPT_NOT_FOUND", "Call attempt was not found.")
+    return {"attempt_id": str(attempt.id), "conversation_id": str(conversation_id), "status": str(attempt.outcome)}
 
 
 @router.post("/support/cases", response_model=SupportCaseResponse, status_code=status.HTTP_201_CREATED)
@@ -393,6 +485,7 @@ def _message_response(message, *, created: bool | None = None) -> MessageRespons
         client_message_id=message.client_message_id,
         body=message.body,
         moderation_status=message.moderation_status,
+        delivery_status="pending",
         created=created,
     )
 

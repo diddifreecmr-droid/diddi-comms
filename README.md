@@ -29,6 +29,12 @@ alembic upgrade head
 uvicorn app_base.main:app --reload --port 8040
 ```
 
+Run the transactional outbox worker separately for Redis delivery:
+
+```bash
+python -m app_base.modules.events.worker
+```
+
 Useful endpoints:
 
 - `GET /health`

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app_base.modules.context.domain import CommunicationContext, TaskReference
 from app_base.modules.conversations.domain import ConversationState
 from app_base.modules.conversations.infra.models import (
+    CallAttemptModel,
     ConversationModel,
     ConversationParticipantModel,
     MessageModel,
@@ -132,6 +133,11 @@ class MessageRepository:
         )
         return result.scalar_one_or_none()
 
+    async def find_by_client_message_any_conversation(
+        self, *, sender_user_id: UUID, client_message_id: str
+    ) -> MessageModel | None:
+        return await self.find_by_client_message(sender_user_id=sender_user_id, client_message_id=client_message_id)
+
     def add_message(
         self,
         *,
@@ -214,3 +220,17 @@ class SupportCaseRepository:
         )
         self.session.add(case)
         return case
+
+
+class CallAttemptRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def find_by_idempotency(self, *, actor_user_id: UUID, idempotency_key: str) -> CallAttemptModel | None:
+        result = await self.session.execute(
+            select(CallAttemptModel).where(
+                CallAttemptModel.actor_user_id == actor_user_id,
+                CallAttemptModel.idempotency_key == idempotency_key,
+            )
+        )
+        return result.scalar_one_or_none()

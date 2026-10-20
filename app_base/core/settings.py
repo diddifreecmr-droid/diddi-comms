@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 
     otel_exporter_otlp_endpoint: str | None = None
 
+    task_conversation_grace_minutes: int = Field(default=60, ge=0)
+    message_retention_days: int = Field(default=180, gt=0)
+    outbox_max_attempts: int = Field(default=5, ge=1, le=20)
+
     @model_validator(mode="after")
     def validate_security_baseline(self) -> Settings:
         if self.api_prefix != "/comms/v1":

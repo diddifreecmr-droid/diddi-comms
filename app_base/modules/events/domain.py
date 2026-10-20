@@ -5,6 +5,7 @@ from uuid import UUID
 
 DIDDICOMMS_EVENTS_STREAM = "diddicomms.events"
 DIDDICOMMS_EVENTS_DLQ_STREAM = "diddicomms.events.dlq"
+DIDDICOMMS_EVENTS_CONSUMER_GROUP = "diddicomms-workers"
 
 
 @dataclass(frozen=True)

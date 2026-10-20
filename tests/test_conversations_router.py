@@ -147,5 +147,6 @@ def test_send_message_route_returns_message(send_message_client) -> None:
         "client_message_id": "client-1",
         "body": "Hello",
         "moderation_status": "accepted",
+        "delivery_status": "pending",
         "created": True,
     }

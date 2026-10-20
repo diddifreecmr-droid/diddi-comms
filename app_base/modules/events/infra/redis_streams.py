@@ -7,7 +7,7 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
-from app_base.modules.events.domain import DIDDICOMMS_EVENTS_STREAM
+from app_base.modules.events.domain import DIDDICOMMS_EVENTS_DLQ_STREAM, DIDDICOMMS_EVENTS_STREAM
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,12 @@ class RedisStreamPublisher:
 
     async def publish(self, event: StreamEvent) -> str:
         entry_id = await self.redis.xadd(self.stream_name, event.to_stream_fields())
+        return str(entry_id)
+
+    async def publish_dlq(self, event: StreamEvent, *, failure_reason: str) -> str:
+        fields = event.to_stream_fields()
+        fields["failure_reason"] = failure_reason[:500]
+        entry_id = await self.redis.xadd(DIDDICOMMS_EVENTS_DLQ_STREAM, fields)
         return str(entry_id)
 
 

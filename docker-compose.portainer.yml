@@ -63,6 +63,30 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  worker:
+    build: .
+    command: ["python", "-m", "app_base.modules.events.worker"]
+    environment:
+      APP_NAME: DiddiComms
+      ENVIRONMENT: ${ENVIRONMENT:-staging}
+      API_PREFIX: /comms/v1
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+asyncpg://${DIDDICOMMS_POSTGRES_USER:-diddicomms}:${DIDDICOMMS_POSTGRES_PASSWORD:-change-me}@postgres:5432/${DIDDICOMMS_POSTGRES_DB:-diddicomms}
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://${DIDDICOMMS_POSTGRES_USER:-diddicomms}:${DIDDICOMMS_POSTGRES_PASSWORD:-change-me}@postgres:5432/${DIDDICOMMS_POSTGRES_DB:-diddicomms}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_KEY_PREFIX: diddicomms
+      IDENTITY_ISSUER: ${IDENTITY_ISSUER:-diddifree-id}
+      IDENTITY_AUDIENCE: diddicomms
+      IDENTITY_SERVICE_TOKEN_URL: ${IDENTITY_SERVICE_TOKEN_URL}
+      OWNER_SERVICE_RESOLVERS_JSON: ${OWNER_SERVICE_RESOLVERS_JSON:-{}}
+      OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   diddicomms-postgres:
   diddicomms-redis:

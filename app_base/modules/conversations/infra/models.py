@@ -131,3 +131,25 @@ class SupportCaseModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CallAttemptModel(Base):
+    __tablename__ = "call_attempts"
+    __table_args__ = (
+        UniqueConstraint("actor_user_id", "idempotency_key", name="uq_call_attempt_actor_idempotency"),
+        Index("ix_call_attempts_conversation_created", "conversation_id", "created_at"),
+        Index("ix_call_attempts_outcome_created", "outcome", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    conversation_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    actor_user_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    target_user_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, server_default="authorized")
+    client_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

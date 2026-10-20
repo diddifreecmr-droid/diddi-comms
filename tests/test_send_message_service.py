@@ -107,6 +107,23 @@ async def test_send_message_rejects_empty_body() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_send_message_rejects_reused_client_id_with_different_body() -> None:
+    existing = _message(body="already sent")
+    service = SendMessageService(
+        FakeSession(conversation=_conversation(), existing_message=existing),
+        resolver_factory=lambda owner: FakeResolver(_context()),
+    )  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="MESSAGE_IDEMPOTENCY_CONFLICT"):
+        await service.send(
+            conversation_id=CONVERSATION_ID,
+            actor_user_id=PASSENGER_ID,
+            client_message_id="client-1",
+            body="different body",
+        )
+
+
 def _conversation() -> ConversationModel:
     return ConversationModel(
         id=CONVERSATION_ID,
@@ -138,5 +155,19 @@ def _context() -> CommunicationContext:
             "calling_allowed": True,
             "closes_at": None,
         }
+    )
+
+
+def _message(*, body: str):
+    from app_base.modules.conversations.infra.models import MessageModel
+
+    return MessageModel(
+        id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        conversation_id=CONVERSATION_ID,
+        sequence=1,
+        sender_user_id=PASSENGER_ID,
+        client_message_id="client-1",
+        body=body,
+        moderation_status="accepted",
     )
 

@@ -2,6 +2,7 @@
 
 from app_base.modules.audit.infra.models import AuditEventModel
 from app_base.modules.conversations.infra.models import (
+    CallAttemptModel,
     ConversationModel,
     ConversationParticipantModel,
     MessageDeliveryModel,
@@ -12,6 +13,7 @@ from app_base.modules.events.infra.models import OutboxEventModel, ProcessedEven
 
 __all__ = [
     "AuditEventModel",
+    "CallAttemptModel",
     "ConversationModel",
     "ConversationParticipantModel",
     "MessageDeliveryModel",
