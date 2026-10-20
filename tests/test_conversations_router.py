@@ -150,3 +150,50 @@ def test_send_message_route_returns_message(send_message_client) -> None:
         "delivery_status": "pending",
         "created": True,
     }
+
+
+@pytest.fixture
+def read_cursor_client(monkeypatch):
+    async def fake_user():
+        return AuthenticatedUser(user_id=PASSENGER_ID)
+
+    async def fake_session():
+        return object()
+
+    async def fake_authorization(*args, **kwargs):
+        return None
+
+    async def fake_mark(self, *, conversation_id, actor_user_id, read_sequence, request_id=None):
+        assert conversation_id == CONVERSATION_ID
+        assert actor_user_id == PASSENGER_ID
+        assert read_sequence == 7
+        return SimpleNamespace(conversation_id=CONVERSATION_ID, read_sequence=7)
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router._ensure_user_can_read_conversation",
+        fake_authorization,
+    )
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.MarkConversationReadService.mark",
+        fake_mark,
+    )
+    app.dependency_overrides[require_current_user] = fake_user
+    app.dependency_overrides[get_session] = fake_session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(require_current_user, None)
+        app.dependency_overrides.pop(get_session, None)
+
+
+def test_mark_conversation_read_route_returns_cursor(read_cursor_client) -> None:
+    response = read_cursor_client.post(
+        f"/comms/v1/conversations/{CONVERSATION_ID}/read",
+        json={"read_seq": 7},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "conversation_id": str(CONVERSATION_ID),
+        "read_seq": 7,
+    }

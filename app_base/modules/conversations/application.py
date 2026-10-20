@@ -177,6 +177,63 @@ class SendMessageResult:
     created: bool
 
 
+@dataclass(frozen=True)
+class ReadCursorResult:
+    conversation_id: UUID
+    read_sequence: int
+
+
+class MarkConversationReadService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.conversations = ConversationRepository(session)
+        self.audit = AuditRecorder(session)
+        self.outbox = OutboxWriter(session)
+
+    async def mark(
+        self,
+        *,
+        conversation_id: UUID,
+        actor_user_id: UUID,
+        read_sequence: int,
+        request_id: str | None = None,
+    ) -> ReadCursorResult:
+        conversation = await self.conversations.find_by_id(conversation_id)
+        if conversation is None:
+            raise LookupError("CONVERSATION_NOT_FOUND")
+        bounded_sequence = min(max(read_sequence, 0), int(conversation.last_sequence or 0))
+        current_sequence = await self.conversations.mark_read(
+            conversation_id=conversation_id,
+            user_id=actor_user_id,
+            read_sequence=bounded_sequence,
+        )
+        self.audit.add(
+            AuditEventDraft(
+                actor_user_id=actor_user_id,
+                action="conversation.read_cursor_changed",
+                target_type="conversation",
+                target_id=str(conversation_id),
+                outcome="succeeded",
+                request_id=request_id,
+                safe_metadata={"read_sequence": current_sequence},
+            )
+        )
+        self.outbox.add(
+            OutboxEventDraft(
+                aggregate_type="conversation",
+                aggregate_id=str(conversation_id),
+                event_type="comms.conversation.read_cursor_changed.v1",
+                correlation_id=request_id,
+                payload={
+                    "conversation_id": str(conversation_id),
+                    "user_id": str(actor_user_id),
+                    "read_sequence": current_sequence,
+                },
+            )
+        )
+        return ReadCursorResult(conversation_id=conversation_id, read_sequence=current_sequence)
+
+
 class SendMessageService:
     max_body_length = 2000
 

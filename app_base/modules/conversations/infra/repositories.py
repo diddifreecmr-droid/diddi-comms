@@ -72,6 +72,20 @@ class ConversationRepository:
         )
         return result.scalar_one_or_none() is not None
 
+    async def mark_read(self, *, conversation_id: UUID, user_id: UUID, read_sequence: int) -> int:
+        result = await self.session.execute(
+            select(ConversationParticipantModel).where(
+                ConversationParticipantModel.conversation_id == conversation_id,
+                ConversationParticipantModel.user_id == user_id,
+                ConversationParticipantModel.left_at.is_(None),
+            )
+        )
+        participant = result.scalar_one_or_none()
+        if participant is None:
+            raise LookupError("ACTOR_NOT_CONVERSATION_PARTICIPANT")
+        participant.read_sequence = max(participant.read_sequence, read_sequence)
+        return participant.read_sequence
+
     def add_participant(
         self,
         *,

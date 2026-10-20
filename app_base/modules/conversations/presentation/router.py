@@ -13,6 +13,7 @@ from app_base.modules.calls.application import CreateCallAttemptService, RecordC
 from app_base.modules.context.domain import TaskReference
 from app_base.modules.conversations.application import (
     EnsureTaskConversationService,
+    MarkConversationReadService,
     SendMessageService,
     SupportCaseService,
 )
@@ -54,6 +55,19 @@ class SendMessageRequest(BaseModel):
 
     client_message_id: str = Field(min_length=1, max_length=120)
     body: str = Field(min_length=1, max_length=2000)
+
+
+class MarkConversationReadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    read_seq: int = Field(ge=0)
+
+
+class MarkConversationReadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    read_seq: int
 
 
 class MessageResponse(BaseModel):
@@ -239,6 +253,33 @@ async def list_messages(
         limit=min(max(limit, 1), 200),
     )
     return [_message_response(message) for message in messages]
+
+
+@router.post(
+    "/conversations/{conversation_id}/read",
+    response_model=MarkConversationReadResponse,
+)
+async def mark_conversation_read(
+    conversation_id: UUID,
+    payload: MarkConversationReadRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MarkConversationReadResponse:
+    await _ensure_user_can_read_conversation(session, conversation_id=conversation_id, user_id=current_user.user_id)
+    try:
+        result = await MarkConversationReadService(session).mark(
+            conversation_id=conversation_id,
+            actor_user_id=current_user.user_id,
+            read_sequence=payload.read_seq,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Conversation was not found.") from exc
+    return MarkConversationReadResponse(
+        conversation_id=result.conversation_id,
+        read_seq=result.read_sequence,
+    )
 
 
 @router.post("/conversations/{conversation_id}/call-attempts", response_model=CallAttemptResponse)
