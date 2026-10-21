@@ -35,6 +35,31 @@ Run the transactional outbox worker separately for Redis delivery:
 python -m app_base.modules.events.worker
 ```
 
+The same worker also consumes DiddiSupport events through a Redis consumer
+group, SQL inbox deduplication, pending-entry reclaim, and a privacy-safe DLQ.
+It retries transient Redis/PostgreSQL failures with bounded exponential backoff
+and exports outbox age, backlog, consumer lag, retry, and DLQ metrics.
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an OTLP/HTTP collector base URL to enable
+FastAPI, HTTPX, Redis, and SQLAlchemy traces. Leave it empty for local runs
+without a collector.
+
+Operational dry-runs:
+
+```bash
+python scripts/operational_check.py --strict
+python scripts/reconcile_support_cases.py --limit 100
+python scripts/replay_support_events.py --event-id <uuid>
+```
+
+Add `--execute` to the replay command only after reviewing its dry-run output.
+See `docs/OPERATIONS_RUNBOOK.md` for deployment, recovery, backup/restore, and
+rollback procedures.
+
+For schema rollback, stop the API and worker first, run the Alembic downgrade,
+deploy matching application code, then restart both processes. Running a newer
+worker against a downgraded schema is intentionally unsupported.
+
 Useful endpoints:
 
 - `GET /health`

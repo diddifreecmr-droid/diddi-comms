@@ -1,7 +1,7 @@
 import json
 from uuid import UUID
 
-from app_base.modules.realtime.router import _event_for_conversation
+from app_base.modules.realtime.router import _event_for_conversation, _stream_id_tuple
 
 CONVERSATION_ID = UUID("99999999-9999-9999-9999-999999999999")
 
@@ -36,3 +36,19 @@ def test_realtime_event_does_not_cross_conversations() -> None:
     )
 
     assert event is None
+
+
+def test_realtime_includes_delivery_events_and_orders_stream_ids() -> None:
+    event = _event_for_conversation(
+        "20-1",
+        {
+            "event_type": "comms.message.delivered.v1",
+            "event_version": "1",
+            "payload": json.dumps({"conversation_id": str(CONVERSATION_ID), "message_id": "message-1"}),
+        },
+        CONVERSATION_ID,
+    )
+
+    assert event is not None
+    assert event["event_type"] == "comms.message.delivered.v1"
+    assert _stream_id_tuple("20-1") > _stream_id_tuple("19-99")

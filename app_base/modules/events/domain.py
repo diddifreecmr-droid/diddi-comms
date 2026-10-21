@@ -15,6 +15,7 @@ class OutboxEventDraft:
     event_type: str
     payload: dict = field(default_factory=dict)
     event_version: int = 1
+    aggregate_version: int = 0
     correlation_id: str | None = None
     causation_id: UUID | None = None
 

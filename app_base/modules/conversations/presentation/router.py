@@ -6,17 +6,28 @@ from fastapi import APIRouter, Depends, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app_base.core.auth_deps import AuthenticatedService, AuthenticatedUser, require_current_user, require_service_token
+from app_base.core.auth_deps import (
+    AuthenticatedService,
+    AuthenticatedUser,
+    DelegatedOperator,
+    require_current_user,
+    require_delegated_operator,
+    require_service_token,
+)
 from app_base.core.database import get_session
 from app_base.core.errors import ApiError
+from app_base.core.rate_limit import enforce_rate_limit, enforce_user_conversation_limits
+from app_base.core.settings import settings
 from app_base.modules.calls.application import CreateCallAttemptService, RecordCallClientResultService
 from app_base.modules.context.domain import TaskReference
 from app_base.modules.conversations.application import (
     EnsureTaskConversationService,
     MarkConversationReadService,
+    MessageDeliveryService,
     SendMessageService,
     SupportCaseService,
 )
+from app_base.modules.conversations.backoffice import BackofficeConversationService
 from app_base.modules.conversations.domain import (
     CommunicationAction,
     ConversationAccessPolicy,
@@ -25,15 +36,21 @@ from app_base.modules.conversations.domain import (
 )
 from app_base.modules.conversations.infra.repositories import (
     ConversationRepository,
+    MessageDeliveryRepository,
     MessageRepository,
     SupportCaseRepository,
 )
+from app_base.modules.conversations.safety import ConversationSafetyService
+from app_base.modules.support.factory import diddisupport_read_client
+from app_base.modules.support.read_client import SupportMessageResponse as RemoteSupportMessage
 
 router = APIRouter(tags=["conversations"])
 
 SUPPORT_CASES_READ_SCOPE = "diddicomms:support-cases:read"
 SUPPORT_CASES_WRITE_SCOPE = "diddicomms:support-cases:write"
 SUPPORT_MESSAGES_WRITE_SCOPE = "diddicomms:messages:write"
+BACKOFFICE_READ_SCOPE = "diddicomms:backoffice:read"
+BACKOFFICE_WRITE_SCOPE = "diddicomms:backoffice:write"
 
 
 class ConversationResponse(BaseModel):
@@ -70,17 +87,63 @@ class MarkConversationReadResponse(BaseModel):
     read_seq: int
 
 
+class DeliveryAcknowledgementRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = Field(pattern=r"^(delivered|read)$")
+
+
+class DeliveryAcknowledgementResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    message_id: UUID
+    status: str
+    changed: bool
+
+
+class ConversationMuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    muted: bool
+
+
+class ConversationMuteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    muted: bool
+
+
+class AbuseReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str = Field(pattern=r"^(harassment|spam|unsafe|fraud|other)$")
+    details: str | None = Field(default=None, max_length=500)
+
+
+class AbuseReportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report_id: UUID
+    conversation_id: UUID
+    message_id: UUID
+    category: str
+    status: str
+    created: bool
+
+
 class MessageResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID
     conversation_id: UUID
     sequence: int
-    sender_user_id: UUID
+    sender_user_id: UUID | str
     client_message_id: str
     body: str
     moderation_status: str
-    delivery_status: str = "pending"
+    delivery_status: str = "accepted"
     created: bool | None = None
 
 
@@ -133,6 +196,7 @@ class SupportCaseResponse(BaseModel):
     status: str
     priority: str
     assigned_to_user_id: UUID | None
+    projection_status: str = "synced"
     created_at: str | None = None
     updated_at: str | None = None
     resolved_at: str | None = None
@@ -188,7 +252,10 @@ async def ensure_task_conversation(
             idempotency_key=idempotency_key,
         )
     except PermissionError as exc:
-        raise ApiError(403, str(exc), "User is not allowed to open this conversation.") from exc
+        code = str(exc)
+        if code == "ACTOR_NOT_TASK_PARTICIPANT":
+            raise ApiError(404, "TASK_NOT_FOUND", "Task was not found.") from exc
+        raise ApiError(403, code, "User is not allowed to open this conversation.") from exc
 
     conversation = result.conversation
     return ConversationResponse(
@@ -213,6 +280,14 @@ async def send_message(
     current_user: AuthenticatedUser = Depends(require_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> MessageResponse:
+    await enforce_user_conversation_limits(
+        request,
+        operation="message",
+        user_id=str(current_user.user_id),
+        conversation_id=str(conversation_id),
+        limit=settings.message_rate_limit_per_minute,
+        window_seconds=60,
+    )
     service = SendMessageService(session)
     try:
         result = await service.send(
@@ -226,7 +301,10 @@ async def send_message(
     except LookupError as exc:
         raise ApiError(404, str(exc), "Conversation was not found.") from exc
     except PermissionError as exc:
-        raise ApiError(403, str(exc), "User is not allowed to send a message.") from exc
+        code = str(exc)
+        if code in {"ACTOR_NOT_TASK_PARTICIPANT", "ACTOR_NOT_SUPPORT_PARTICIPANT"}:
+            raise ApiError(404, "CONVERSATION_NOT_FOUND", "Conversation was not found.") from exc
+        raise ApiError(403, code, "User is not allowed to send a message.") from exc
     except ValueError as exc:
         code = str(exc)
         raise ApiError(
@@ -235,7 +313,7 @@ async def send_message(
             "Message payload is invalid.",
         ) from exc
 
-    return _message_response(result.message, created=result.created)
+    return _message_response(result.message, created=result.created, delivery_status="accepted")
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[MessageResponse])
@@ -247,12 +325,26 @@ async def list_messages(
     session: AsyncSession = Depends(get_session),
 ) -> list[MessageResponse]:
     await _ensure_user_can_read_conversation(session, conversation_id=conversation_id, user_id=current_user.user_id)
+    conversation = await ConversationRepository(session).find_by_id(conversation_id)
+    if conversation is not None and conversation.conversation_type == "support":
+        case = await SupportCaseRepository(session).find_by_conversation(conversation_id)
+        if case is None:
+            raise ApiError(404, "SUPPORT_CASE_NOT_FOUND", "Support case was not found.")
+        messages = await diddisupport_read_client().list_user_visible_messages(case.external_case_id)
+        return [
+            _remote_support_message_response(message, conversation_id=conversation_id, sequence=index)
+            for index, message in enumerate(messages, start=1)
+            if index > max(after_seq, 0)
+        ][: min(max(limit, 1), 200)]
     messages = await MessageRepository(session).list_after(
         conversation_id=conversation_id,
         after_sequence=max(after_seq, 0),
         limit=min(max(limit, 1), 200),
     )
-    return [_message_response(message) for message in messages]
+    statuses = await MessageDeliveryRepository(session).statuses_for_messages([message.id for message in messages])
+    return [
+        _message_response(message, delivery_status=statuses.get(message.id, "accepted")) for message in messages
+    ]
 
 
 @router.post(
@@ -282,6 +374,194 @@ async def mark_conversation_read(
     )
 
 
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/delivery",
+    response_model=DeliveryAcknowledgementResponse,
+)
+async def acknowledge_message_delivery(
+    conversation_id: UUID,
+    message_id: UUID,
+    payload: DeliveryAcknowledgementRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DeliveryAcknowledgementResponse:
+    try:
+        result = await MessageDeliveryService(session).acknowledge(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_user_id=current_user.user_id,
+            status=payload.status,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Message was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(404, "MESSAGE_NOT_FOUND", "Message was not found.") from exc
+    except ValueError as exc:
+        raise ApiError(422, str(exc), "Delivery status is invalid.") from exc
+    return DeliveryAcknowledgementResponse(
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
+        status=result.status,
+        changed=result.changed,
+    )
+
+
+@router.put("/conversations/{conversation_id}/mute", response_model=ConversationMuteResponse)
+async def set_conversation_muted(
+    conversation_id: UUID,
+    payload: ConversationMuteRequest,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ConversationMuteResponse:
+    try:
+        preference = await ConversationSafetyService(session).set_muted(
+            conversation_id=conversation_id,
+            user_id=current_user.user_id,
+            muted=payload.muted,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Conversation was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(404, "CONVERSATION_NOT_FOUND", "Conversation was not found.") from exc
+    return ConversationMuteResponse(conversation_id=conversation_id, muted=preference.muted)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/reports",
+    response_model=AbuseReportResponse,
+)
+async def report_message_abuse(
+    conversation_id: UUID,
+    message_id: UUID,
+    payload: AbuseReportRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> AbuseReportResponse:
+    if not idempotency_key:
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    try:
+        result = await ConversationSafetyService(session).report_message(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            reporter_user_id=current_user.user_id,
+            category=payload.category,
+            details=payload.details,
+            idempotency_key=idempotency_key,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Message was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(404, "MESSAGE_NOT_FOUND", "Message was not found.") from exc
+    except ValueError as exc:
+        code = str(exc)
+        raise ApiError(409 if code.endswith("CONFLICT") else 422, code, "Report is invalid.") from exc
+    return AbuseReportResponse(
+        report_id=result.report.id,
+        conversation_id=result.report.conversation_id,
+        message_id=result.report.message_id,
+        category=result.report.category,
+        status=result.report.status,
+        created=result.created,
+    )
+
+
+@router.post(
+    "/backoffice/tasks/{owner_service}/{task_type}/{task_id}/conversation",
+    response_model=ConversationResponse,
+)
+async def ensure_backoffice_task_conversation(
+    owner_service: str,
+    task_type: str,
+    task_id: UUID,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    operator: DelegatedOperator = Depends(require_delegated_operator(required_scope=BACKOFFICE_READ_SCOPE)),
+    session: AsyncSession = Depends(get_session),
+) -> ConversationResponse:
+    if not idempotency_key:
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    result = await BackofficeConversationService(session).ensure_conversation(
+        task=TaskReference(owner_service=owner_service, task_type=task_type, task_id=task_id),
+        operator=operator,
+        idempotency_key=idempotency_key,
+    )
+    conversation = result.conversation
+    return ConversationResponse(
+        id=conversation.id,
+        type=conversation.conversation_type,
+        owner_service=conversation.owner_service,
+        task_type=conversation.task_type,
+        task_id=conversation.task_id,
+        state=conversation.state,
+        task_version=conversation.task_version,
+        closes_at=conversation.closes_at.isoformat().replace("+00:00", "Z") if conversation.closes_at else None,
+        created=result.created,
+    )
+
+
+@router.get(
+    "/backoffice/conversations/{conversation_id}/messages",
+    response_model=list[MessageResponse],
+)
+async def list_backoffice_messages(
+    conversation_id: UUID,
+    after_seq: int = 0,
+    limit: int = 100,
+    operator: DelegatedOperator = Depends(require_delegated_operator(required_scope=BACKOFFICE_READ_SCOPE)),
+    session: AsyncSession = Depends(get_session),
+) -> list[MessageResponse]:
+    try:
+        messages = await BackofficeConversationService(session).list_messages(
+            conversation_id=conversation_id,
+            operator=operator,
+            after_sequence=after_seq,
+            limit=limit,
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Conversation was not found.") from exc
+    statuses = await MessageDeliveryRepository(session).statuses_for_messages([message.id for message in messages])
+    return [
+        _message_response(message, delivery_status=statuses.get(message.id, "accepted")) for message in messages
+    ]
+
+
+@router.post(
+    "/backoffice/conversations/{conversation_id}/messages",
+    response_model=MessageResponse,
+)
+async def send_backoffice_message(
+    conversation_id: UUID,
+    payload: SendMessageRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    operator: DelegatedOperator = Depends(require_delegated_operator(required_scope=BACKOFFICE_WRITE_SCOPE)),
+    session: AsyncSession = Depends(get_session),
+) -> MessageResponse:
+    if not idempotency_key:
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    try:
+        result = await BackofficeConversationService(session).send_message(
+            conversation_id=conversation_id,
+            operator=operator,
+            client_message_id=payload.client_message_id,
+            body=payload.body,
+            idempotency_key=idempotency_key,
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Conversation was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(403, str(exc), "Conversation does not accept Backoffice messages.") from exc
+    except ValueError as exc:
+        code = str(exc)
+        raise ApiError(409 if code == "MESSAGE_IDEMPOTENCY_CONFLICT" else 422, code, "Message is invalid.") from exc
+    return _message_response(result.message, created=result.created, delivery_status="accepted")
+
+
 @router.post("/conversations/{conversation_id}/call-attempts", response_model=CallAttemptResponse)
 async def create_call_attempt(
     conversation_id: UUID,
@@ -293,6 +573,14 @@ async def create_call_attempt(
 ) -> CallAttemptResponse:
     if not idempotency_key:
         raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    await enforce_user_conversation_limits(
+        request,
+        operation="call",
+        user_id=str(current_user.user_id),
+        conversation_id=str(conversation_id),
+        limit=settings.call_rate_limit_per_five_minutes,
+        window_seconds=300,
+    )
     try:
         result = await CreateCallAttemptService(session).create(
             conversation_id=conversation_id,
@@ -304,11 +592,53 @@ async def create_call_attempt(
     except LookupError as exc:
         raise ApiError(404, str(exc), "Conversation was not found.") from exc
     except PermissionError as exc:
-        raise ApiError(403, str(exc), "User is not allowed to call this participant.") from exc
+        code = str(exc)
+        if code == "ACTOR_NOT_TASK_PARTICIPANT":
+            raise ApiError(404, "CONVERSATION_NOT_FOUND", "Conversation was not found.") from exc
+        raise ApiError(403, code, "User is not allowed to call this participant.") from exc
     except ValueError as exc:
         code = str(exc)
         status_code = 409 if code == "CALL_IDEMPOTENCY_CONFLICT" else 422
         raise ApiError(status_code, code, "Call request is invalid.") from exc
+    return CallAttemptResponse(
+        attempt_id=result.attempt.id,
+        conversation_id=result.attempt.conversation_id,
+        target_user_id=result.attempt.target_user_id,
+        status=result.attempt.outcome,
+        dial_action={"scheme": "tel", "value": f"tel:{result.target_phone_e164}"},
+        created=result.created,
+    )
+
+
+@router.post("/backoffice/conversations/{conversation_id}/call-attempts", response_model=CallAttemptResponse)
+async def create_backoffice_call_attempt(
+    conversation_id: UUID,
+    payload: CallAttemptRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    operator: DelegatedOperator = Depends(require_delegated_operator(required_scope=BACKOFFICE_WRITE_SCOPE)),
+    session: AsyncSession = Depends(get_session),
+) -> CallAttemptResponse:
+    """Authorize an audited external call on behalf of a support operator."""
+    if not idempotency_key:
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    try:
+        result = await CreateCallAttemptService(session).create(
+            conversation_id=conversation_id,
+            actor_user_id=operator.operator_user_id,
+            target_user_id=payload.target_user_id,
+            idempotency_key=idempotency_key,
+            request_id=getattr(request.state, "request_id", operator.request_id),
+            allow_delegated_operator=True,
+            actor_service=operator.service.subject,
+        )
+    except LookupError as exc:
+        raise ApiError(404, str(exc), "Conversation was not found.") from exc
+    except PermissionError as exc:
+        raise ApiError(403, str(exc), "The operator is not allowed to call this participant.") from exc
+    except ValueError as exc:
+        code = str(exc)
+        raise ApiError(409 if code == "CALL_IDEMPOTENCY_CONFLICT" else 422, code, "Call request is invalid.") from exc
     return CallAttemptResponse(
         attempt_id=result.attempt.id,
         conversation_id=result.attempt.conversation_id,
@@ -365,6 +695,19 @@ async def open_support_case(
         if payload.owner_service and payload.task_type and payload.task_id
         else None
     )
+    client_ip = request.client.host if request.client else "unknown"
+    for dimension, subject_value in (
+        ("user", str(current_user.user_id)),
+        ("task", str(payload.task_id) if payload.task_id else "none"),
+        ("ip", client_ip),
+    ):
+        await enforce_rate_limit(
+            request,
+            bucket=f"support-case:{dimension}",
+            subject=subject_value,
+            limit=settings.support_case_rate_limit_per_hour,
+            window_seconds=3600,
+        )
     try:
         result = await SupportCaseService(session).open_case(
             requester_user_id=current_user.user_id,
@@ -426,15 +769,15 @@ async def list_support_case_messages(
     case = await SupportCaseRepository(session).find_by_id(case_id)
     if case is None:
         raise ApiError(404, "SUPPORT_CASE_NOT_FOUND", "Support case was not found.")
-    messages = await MessageRepository(session).list_after(
-        conversation_id=case.conversation_id,
-        after_sequence=max(after_seq, 0),
-        limit=min(max(limit, 1), 200),
-    )
-    return [_message_response(message) for message in messages]
+    messages = await diddisupport_read_client().list_user_visible_messages(case.external_case_id)
+    return [
+        _remote_support_message_response(message, conversation_id=case.conversation_id, sequence=index)
+        for index, message in enumerate(messages, start=1)
+        if index > max(after_seq, 0)
+    ][: min(max(limit, 1), 200)]
 
 
-@router.post("/support/cases/{case_id}/assign", response_model=SupportCaseResponse)
+@router.post("/support/cases/{case_id}/assign", response_model=SupportCaseResponse, deprecated=True)
 async def assign_support_case(
     case_id: UUID,
     payload: AssignSupportCaseRequest,
@@ -442,21 +785,14 @@ async def assign_support_case(
     service: AuthenticatedService = Depends(require_service_token(required_scope=SUPPORT_CASES_WRITE_SCOPE)),
     session: AsyncSession = Depends(get_session),
 ) -> SupportCaseResponse:
-    try:
-        case = await SupportCaseService(session).assign_case(
-            case_id=case_id,
-            assignee_user_id=payload.assignee_user_id,
-            actor_service=service.subject,
-            request_id=getattr(request.state, "request_id", None),
-        )
-    except LookupError as exc:
-        raise ApiError(404, str(exc), "Support case was not found.") from exc
-    except ValueError as exc:
-        raise ApiError(409, str(exc), "Support case cannot be assigned.") from exc
-    return _support_case_response(case)
+    raise ApiError(
+        410,
+        "DIDDISUPPORT_BACKOFFICE_REQUIRED",
+        "Support assignment is owned by DiddiSupport Backoffice.",
+    )
 
 
-@router.patch("/support/cases/{case_id}/priority", response_model=SupportCaseResponse)
+@router.patch("/support/cases/{case_id}/priority", response_model=SupportCaseResponse, deprecated=True)
 async def update_support_case_priority(
     case_id: UUID,
     payload: UpdateSupportPriorityRequest,
@@ -464,21 +800,14 @@ async def update_support_case_priority(
     service: AuthenticatedService = Depends(require_service_token(required_scope=SUPPORT_CASES_WRITE_SCOPE)),
     session: AsyncSession = Depends(get_session),
 ) -> SupportCaseResponse:
-    try:
-        case = await SupportCaseService(session).update_priority(
-            case_id=case_id,
-            priority=payload.priority,
-            actor_service=service.subject,
-            request_id=getattr(request.state, "request_id", None),
-        )
-    except LookupError as exc:
-        raise ApiError(404, str(exc), "Support case was not found.") from exc
-    except ValueError as exc:
-        raise ApiError(422, str(exc), "Support priority is invalid.") from exc
-    return _support_case_response(case)
+    raise ApiError(
+        410,
+        "DIDDISUPPORT_BACKOFFICE_REQUIRED",
+        "Support priority is owned by DiddiSupport Backoffice.",
+    )
 
 
-@router.post("/support/cases/{case_id}/messages", response_model=MessageResponse)
+@router.post("/support/cases/{case_id}/messages", response_model=MessageResponse, deprecated=True)
 async def send_support_agent_message(
     case_id: UUID,
     payload: AgentSupportMessageRequest,
@@ -486,25 +815,14 @@ async def send_support_agent_message(
     service: AuthenticatedService = Depends(require_service_token(required_scope=SUPPORT_MESSAGES_WRITE_SCOPE)),
     session: AsyncSession = Depends(get_session),
 ) -> MessageResponse:
-    try:
-        result = await SupportCaseService(session).send_agent_message(
-            case_id=case_id,
-            agent_user_id=payload.agent_user_id,
-            client_message_id=payload.client_message_id,
-            body=payload.body,
-            actor_service=service.subject,
-            request_id=getattr(request.state, "request_id", None),
-        )
-    except LookupError as exc:
-        raise ApiError(404, str(exc), "Support case was not found.") from exc
-    except PermissionError as exc:
-        raise ApiError(403, str(exc), "Agent is not allowed to reply to this support case.") from exc
-    except ValueError as exc:
-        raise ApiError(409, str(exc), "Support case does not accept new messages.") from exc
-    return _message_response(result.message, created=result.created)
+    raise ApiError(
+        410,
+        "DIDDISUPPORT_BACKOFFICE_REQUIRED",
+        "Agent replies are owned by DiddiSupport Backoffice.",
+    )
 
 
-@router.post("/support/cases/{case_id}/resolve", response_model=SupportCaseResponse)
+@router.post("/support/cases/{case_id}/resolve", response_model=SupportCaseResponse, deprecated=True)
 async def resolve_support_case(
     case_id: UUID,
     payload: ResolveSupportCaseRequest,
@@ -512,19 +830,19 @@ async def resolve_support_case(
     service: AuthenticatedService = Depends(require_service_token(required_scope=SUPPORT_CASES_WRITE_SCOPE)),
     session: AsyncSession = Depends(get_session),
 ) -> SupportCaseResponse:
-    try:
-        case = await SupportCaseService(session).resolve_case(
-            case_id=case_id,
-            actor_service=service.subject,
-            resolution_note=payload.resolution_note,
-            request_id=getattr(request.state, "request_id", None),
-        )
-    except LookupError as exc:
-        raise ApiError(404, str(exc), "Support case was not found.") from exc
-    return _support_case_response(case)
+    raise ApiError(
+        410,
+        "DIDDISUPPORT_BACKOFFICE_REQUIRED",
+        "Support resolution is owned by DiddiSupport Backoffice.",
+    )
 
 
-def _message_response(message, *, created: bool | None = None) -> MessageResponse:
+def _message_response(
+    message,
+    *,
+    created: bool | None = None,
+    delivery_status: str = "accepted",
+) -> MessageResponse:
     return MessageResponse(
         id=message.id,
         conversation_id=message.conversation_id,
@@ -533,8 +851,27 @@ def _message_response(message, *, created: bool | None = None) -> MessageRespons
         client_message_id=message.client_message_id,
         body=message.body,
         moderation_status=message.moderation_status,
-        delivery_status="pending",
+        delivery_status=delivery_status,
         created=created,
+    )
+
+
+def _remote_support_message_response(
+    message: RemoteSupportMessage,
+    *,
+    conversation_id: UUID,
+    sequence: int,
+) -> MessageResponse:
+    return MessageResponse(
+        id=message.message_id,
+        conversation_id=conversation_id,
+        sequence=sequence,
+        sender_user_id=message.author_id,
+        client_message_id=str(message.message_id),
+        body=message.body,
+        moderation_status="accepted",
+        delivery_status="delivered",
+        created=None,
     )
 
 
@@ -545,7 +882,7 @@ async def _ensure_user_can_read_conversation(session: AsyncSession, *, conversat
         raise ApiError(404, "CONVERSATION_NOT_FOUND", "Conversation was not found.")
     if conversation.conversation_type == "support":
         if not await conversations.has_active_participant(conversation_id=conversation_id, user_id=user_id):
-            raise ApiError(403, "ACTOR_NOT_SUPPORT_PARTICIPANT", "User is not allowed to read this conversation.")
+            raise ApiError(404, "CONVERSATION_NOT_FOUND", "Conversation was not found.")
         return
 
     task = TaskReference(
@@ -567,7 +904,7 @@ async def _ensure_user_can_read_conversation(session: AsyncSession, *, conversat
         ),
     )
     if not decision.allowed:
-        raise ApiError(403, decision.reason_code, "User is not allowed to read this conversation.")
+        raise ApiError(404, "CONVERSATION_NOT_FOUND", "Conversation was not found.")
 
 
 def _support_case_response(case) -> SupportCaseResponse:
@@ -582,6 +919,7 @@ def _support_case_response(case) -> SupportCaseResponse:
         status=case.status,
         priority=case.priority,
         assigned_to_user_id=case.assigned_to_user_id,
+        projection_status=getattr(case, "projection_status", "synced"),
         created_at=case.created_at.isoformat().replace("+00:00", "Z") if case.created_at else None,
         updated_at=case.updated_at.isoformat().replace("+00:00", "Z") if case.updated_at else None,
         resolved_at=case.resolved_at.isoformat().replace("+00:00", "Z") if case.resolved_at else None,

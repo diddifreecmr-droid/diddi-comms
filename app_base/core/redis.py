@@ -14,6 +14,11 @@ def create_redis() -> Redis:
     return Redis.from_url(settings.redis_url, decode_responses=True)
 
 
+def create_support_events_redis() -> Redis:
+    url = settings.support_events_redis_url or settings.redis_url
+    return Redis.from_url(url, decode_responses=True)
+
+
 async def ping_redis(client: Redis) -> None:
     await client.ping()
     logger.info("redis reachable")
@@ -24,4 +29,3 @@ async def redis_ready(client: Any) -> bool:
         return client is not None and bool(await client.ping())
     except Exception:
         return False
-

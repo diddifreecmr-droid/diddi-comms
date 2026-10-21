@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app_base.modules.audit.application import AuditEventDraft, AuditRecorder
 from app_base.modules.context.domain import TaskReference
 from app_base.modules.context.infra.factory import resolver_for_owner
+from app_base.modules.conversations.application import ResolverFactory
 from app_base.modules.conversations.domain import (
     CommunicationAction,
     ConversationAccessPolicy,
@@ -29,8 +31,9 @@ class CallAttemptResult:
 
 
 class CreateCallAttemptService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, resolver_factory: ResolverFactory = resolver_for_owner) -> None:
         self.session = session
+        self.resolver_factory = resolver_factory
         self.conversations = ConversationRepository(session)
         self.attempts = CallAttemptRepository(session)
         self.audit = AuditRecorder(session)
@@ -45,6 +48,8 @@ class CreateCallAttemptService:
         target_user_id: UUID,
         idempotency_key: str,
         request_id: str | None = None,
+        allow_delegated_operator: bool = False,
+        actor_service: str | None = None,
     ) -> CallAttemptResult:
         existing = await self.attempts.find_by_idempotency(
             actor_user_id=actor_user_id, idempotency_key=idempotency_key
@@ -55,66 +60,27 @@ class CreateCallAttemptService:
             existing_conversation = await self.conversations.find_by_id(conversation_id)
             if existing_conversation is None:
                 raise LookupError("CONVERSATION_NOT_FOUND")
-            existing_task = TaskReference(
-                owner_service=existing_conversation.owner_service,
-                task_type=existing_conversation.task_type,
-                task_id=existing_conversation.task_id,
+            target_phone = await self._authorize_target(
+                conversation=existing_conversation,
+                actor_user_id=actor_user_id,
+                target_user_id=target_user_id,
+                request_id=request_id,
+                idempotency_key=idempotency_key,
+                allow_delegated_operator=allow_delegated_operator,
             )
-            existing_context = await resolver_for_owner(existing_task.owner_service).get_task(
-                existing_task.task_type, existing_task.task_id
-            )
-            existing_target = next(
-                (participant for participant in existing_context.participants if participant.user_id == target_user_id),
-                None,
-            )
-            if existing_target is None or not existing_target.phone_e164:
-                raise ValueError("CALL_TARGET_NUMBER_UNAVAILABLE")
-            return CallAttemptResult(existing, existing_target.phone_e164, False)
+            return CallAttemptResult(existing, target_phone, False)
 
         conversation = await self.conversations.find_by_id(conversation_id)
         if conversation is None:
             raise LookupError("CONVERSATION_NOT_FOUND")
-        if conversation.conversation_type != "task":
-            raise PermissionError("CALL_NOT_ALLOWED_FOR_CONVERSATION_TYPE")
-
-        task = TaskReference(
-            owner_service=conversation.owner_service,
-            task_type=conversation.task_type,
-            task_id=conversation.task_id,
-        )
-        context = await resolver_for_owner(task.owner_service).get_task(task.task_type, task.task_id)
-        decision = self.policy.decide(
-            action=CommunicationAction.CALL,
+        target_phone = await self._authorize_target(
+            conversation=conversation,
             actor_user_id=actor_user_id,
             target_user_id=target_user_id,
-            context=context,
-            conversation=ConversationAccessSnapshot(
-                task=task,
-                state=ConversationState(conversation.state),
-                closes_at=conversation.closes_at,
-            ),
+            request_id=request_id,
+            idempotency_key=idempotency_key,
+            allow_delegated_operator=allow_delegated_operator,
         )
-        if not decision.allowed:
-            self.audit.add(
-                AuditEventDraft(
-                    actor_user_id=actor_user_id,
-                    action="call_attempt.denied",
-                    target_type="conversation",
-                    target_id=str(conversation_id),
-                    outcome="denied",
-                    reason_code=decision.reason_code,
-                    request_id=request_id,
-                    idempotency_key=idempotency_key,
-                )
-            )
-            raise PermissionError(decision.reason_code)
-
-        target = next(
-            (participant for participant in context.participants if participant.user_id == target_user_id),
-            None,
-        )
-        if target is None or not target.phone_e164:
-            raise ValueError("CALL_TARGET_NUMBER_UNAVAILABLE")
 
         attempt = CallAttemptModel(
             id=uuid4(),
@@ -129,6 +95,7 @@ class CreateCallAttemptService:
         self.audit.add(
             AuditEventDraft(
                 actor_user_id=actor_user_id,
+                actor_service=actor_service,
                 action="call_attempt.created",
                 target_type="call_attempt",
                 target_id=str(attempt.id),
@@ -143,6 +110,7 @@ class CreateCallAttemptService:
                 aggregate_type="call_attempt",
                 aggregate_id=str(attempt.id),
                 event_type="comms.call_attempt.created.v1",
+                aggregate_version=1,
                 correlation_id=request_id,
                 payload={
                     "call_attempt_id": str(attempt.id),
@@ -152,7 +120,59 @@ class CreateCallAttemptService:
                 },
             )
         )
-        return CallAttemptResult(attempt, target.phone_e164, True)
+        return CallAttemptResult(attempt, target_phone, True)
+
+    async def _authorize_target(
+        self,
+        *,
+        conversation: Any,
+        actor_user_id: UUID,
+        target_user_id: UUID,
+        request_id: str | None,
+        idempotency_key: str,
+        allow_delegated_operator: bool = False,
+    ) -> str:
+        if conversation.conversation_type != "task":
+            raise PermissionError("CALL_NOT_ALLOWED_FOR_CONVERSATION_TYPE")
+        task = TaskReference(
+            owner_service=conversation.owner_service,
+            task_type=conversation.task_type,
+            task_id=conversation.task_id,
+        )
+        context = await self.resolver_factory(task.owner_service).get_task(task.task_type, task.task_id)
+        decision = self.policy.decide(
+            action=CommunicationAction.CALL,
+            actor_user_id=target_user_id if allow_delegated_operator else actor_user_id,
+            target_user_id=None if allow_delegated_operator else target_user_id,
+            context=context,
+            conversation=ConversationAccessSnapshot(
+                task=task,
+                state=ConversationState(conversation.state),
+                closes_at=conversation.closes_at,
+            ),
+        )
+        if not decision.allowed:
+            self.audit.add(
+                AuditEventDraft(
+                    actor_user_id=actor_user_id,
+                    action="call_attempt.denied",
+                    target_type="conversation",
+                    target_id=str(conversation.id),
+                    outcome="denied",
+                    reason_code=decision.reason_code,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                )
+            )
+            raise PermissionError(decision.reason_code)
+
+        target = next(
+            (participant for participant in context.participants if participant.user_id == target_user_id),
+            None,
+        )
+        if target is None or not target.phone_e164:
+            raise ValueError("CALL_TARGET_NUMBER_UNAVAILABLE")
+        return target.phone_e164
 
 
 class RecordCallClientResultService:
@@ -189,6 +209,7 @@ class RecordCallClientResultService:
                 aggregate_type="call_attempt",
                 aggregate_id=str(attempt.id),
                 event_type="comms.call_attempt.client_result_recorded.v1",
+                aggregate_version=2,
                 correlation_id=request_id,
                 payload={"call_attempt_id": str(attempt.id), "client_result": result},
             )

@@ -173,19 +173,18 @@ def test_backoffice_can_list_support_cases(support_service_client) -> None:
     assert response.json()[0]["id"] == str(CASE_ID)
 
 
-def test_backoffice_can_assign_support_case(support_service_client) -> None:
+def test_legacy_backoffice_assignment_redirects_to_diddisupport(support_service_client) -> None:
     response = support_service_client.post(
         f"/comms/v1/support/cases/{CASE_ID}/assign",
         headers={"Authorization": "Bearer service-token", "X-Client-ID": "backoffice-staging-diddicomms"},
         json={"assignee_user_id": str(AGENT_ID)},
     )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "assigned"
-    assert response.json()["assigned_to_user_id"] == str(AGENT_ID)
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "DIDDISUPPORT_BACKOFFICE_REQUIRED"
 
 
-def test_backoffice_can_send_agent_message(support_service_client) -> None:
+def test_legacy_agent_message_redirects_to_diddisupport(support_service_client) -> None:
     response = support_service_client.post(
         f"/comms/v1/support/cases/{CASE_ID}/messages",
         headers={"Authorization": "Bearer service-token", "X-Client-ID": "backoffice-staging-diddicomms"},
@@ -196,9 +195,8 @@ def test_backoffice_can_send_agent_message(support_service_client) -> None:
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["sender_user_id"] == str(AGENT_ID)
-    assert response.json()["created"] is True
+    assert response.status_code == 410
+    assert response.json()["error"]["code"] == "DIDDISUPPORT_BACKOFFICE_REQUIRED"
 
 
 def _case(*, status: str = "open", assigned_to_user_id=None):

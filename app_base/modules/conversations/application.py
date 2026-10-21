@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app_base.core.metrics import increment
 from app_base.modules.audit.application import AuditEventDraft, AuditRecorder
 from app_base.modules.context.domain import CommunicationContext, ExternalName, TaskReference
 from app_base.modules.context.infra.factory import resolver_for_owner
@@ -21,6 +22,7 @@ from app_base.modules.conversations.domain import (
 from app_base.modules.conversations.infra.models import ConversationModel, MessageModel
 from app_base.modules.conversations.infra.repositories import (
     ConversationRepository,
+    MessageDeliveryRepository,
     MessageRepository,
     SupportCaseRepository,
 )
@@ -156,6 +158,7 @@ class EnsureTaskConversationService:
                 aggregate_type="conversation",
                 aggregate_id=str(draft.conversation.id),
                 event_type="comms.conversation.created.v1",
+                aggregate_version=context.version,
                 correlation_id=request_id,
                 payload={
                     "conversation_id": str(draft.conversation.id),
@@ -181,6 +184,80 @@ class SendMessageResult:
 class ReadCursorResult:
     conversation_id: UUID
     read_sequence: int
+
+
+@dataclass(frozen=True)
+class DeliveryReceiptResult:
+    message_id: UUID
+    conversation_id: UUID
+    status: str
+    changed: bool
+
+
+class MessageDeliveryService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.messages = MessageRepository(session)
+        self.conversations = ConversationRepository(session)
+        self.deliveries = MessageDeliveryRepository(session)
+        self.audit = AuditRecorder(session)
+        self.outbox = OutboxWriter(session)
+
+    async def acknowledge(
+        self,
+        *,
+        conversation_id: UUID,
+        message_id: UUID,
+        recipient_user_id: UUID,
+        status: str,
+        request_id: str | None = None,
+    ) -> DeliveryReceiptResult:
+        message = await self.messages.find_by_id(message_id)
+        if message is None or message.conversation_id != conversation_id:
+            raise LookupError("MESSAGE_NOT_FOUND")
+        delivery = await self.deliveries.find_for_recipient(
+            message_id=message_id,
+            recipient_user_id=recipient_user_id,
+        )
+        if delivery is None:
+            raise PermissionError("ACTOR_NOT_MESSAGE_RECIPIENT")
+        changed = self.deliveries.advance(delivery, status=status)
+        if changed:
+            if status == "delivered":  # noqa: SIM108 - literal branches keep manifest conformance discoverable.
+                event_type = "comms.message.delivered.v1"
+            else:
+                event_type = "comms.message.read.v1"
+            self.audit.add(
+                AuditEventDraft(
+                    actor_user_id=recipient_user_id,
+                    action=f"message.{status}",
+                    target_type="message",
+                    target_id=str(message_id),
+                    outcome="succeeded",
+                    request_id=request_id,
+                    safe_metadata={"conversation_id": str(conversation_id)},
+                )
+            )
+            self.outbox.add(
+                OutboxEventDraft(
+                    aggregate_type="conversation",
+                    aggregate_id=str(conversation_id),
+                    event_type=event_type,
+                    aggregate_version=message.sequence,
+                    correlation_id=request_id,
+                    payload={
+                        "conversation_id": str(conversation_id),
+                        "message_id": str(message_id),
+                        "recipient_user_id": str(recipient_user_id),
+                    },
+                )
+            )
+            increment("diddicomms_delivery_receipts_total", {"status": status})
+        return DeliveryReceiptResult(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            status=delivery.status,
+            changed=changed,
+        )
 
 
 class MarkConversationReadService:
@@ -223,6 +300,7 @@ class MarkConversationReadService:
                 aggregate_type="conversation",
                 aggregate_id=str(conversation_id),
                 event_type="comms.conversation.read_cursor_changed.v1",
+                aggregate_version=current_sequence,
                 correlation_id=request_id,
                 payload={
                     "conversation_id": str(conversation_id),
@@ -243,14 +321,17 @@ class SendMessageService:
         *,
         resolver_factory: ResolverFactory = resolver_for_owner,
         policy: ConversationAccessPolicy | None = None,
+        support_client: DiddiSupportReadClient | None = None,
     ) -> None:
         self.session = session
         self.resolver_factory = resolver_factory
         self.policy = policy or ConversationAccessPolicy()
         self.conversations = ConversationRepository(session)
         self.messages = MessageRepository(session)
+        self.deliveries = MessageDeliveryRepository(session)
         self.audit = AuditRecorder(session)
         self.outbox = OutboxWriter(session)
+        self.support_client = support_client
 
     async def send(
         self,
@@ -268,18 +349,15 @@ class SendMessageService:
         if len(body) > self.max_body_length:
             raise ValueError("MESSAGE_BODY_TOO_LONG")
 
+        conversation = await self.conversations.find_by_id(conversation_id)
+        if conversation is None:
+            raise LookupError("CONVERSATION_NOT_FOUND")
         existing = await self.messages.find_by_client_message(
             sender_user_id=actor_user_id,
             client_message_id=client_message_id,
         )
-        if existing is not None:
-            if existing.body != body:
-                raise ValueError("MESSAGE_IDEMPOTENCY_CONFLICT")
-            return SendMessageResult(message=existing, created=False)
-
-        conversation = await self.conversations.find_by_id(conversation_id)
-        if conversation is None:
-            raise LookupError("CONVERSATION_NOT_FOUND")
+        if existing is not None and (existing.conversation_id != conversation_id or existing.body != body):
+            raise ValueError("MESSAGE_IDEMPOTENCY_CONFLICT")
 
         if conversation.conversation_type == "support":
             if ConversationState(conversation.state) not in self.policy.writable_states:
@@ -301,12 +379,28 @@ class SendMessageService:
                     )
                 )
                 raise PermissionError("ACTOR_NOT_SUPPORT_PARTICIPANT")
+            case = await SupportCaseRepository(self.session).find_by_conversation(conversation.id)
+            if case is None:
+                raise LookupError("SUPPORT_CASE_NOT_FOUND")
+            support_client = self.support_client or diddisupport_read_client()
+            remote_message = await support_client.send_user_message(
+                case_id=case.external_case_id,
+                reporter_user_id=actor_user_id,
+                body=body,
+                idempotency_key=client_message_id,
+                request_id=request_id,
+            )
+            if existing is not None:
+                return SendMessageResult(message=existing, created=False)
             message = self.messages.add_message(
                 conversation=conversation,
                 sender_user_id=actor_user_id,
                 client_message_id=client_message_id,
                 body=body,
+                message_id=remote_message.message_id,
             )
+            participants = await self.conversations.participants_for(conversation.id)
+            self.deliveries.add_recipients(message=message, participants=participants)
             self.audit.add(
                 AuditEventDraft(
                     actor_user_id=actor_user_id,
@@ -324,6 +418,7 @@ class SendMessageService:
                     aggregate_type="support_case",
                     aggregate_id=str(conversation.task_id),
                     event_type="comms.support.message.created.v1",
+                    aggregate_version=message.sequence,
                     correlation_id=request_id,
                     payload={
                         "conversation_id": str(conversation.id),
@@ -367,12 +462,17 @@ class SendMessageService:
             )
             raise PermissionError(decision.reason_code)
 
+        if existing is not None:
+            return SendMessageResult(message=existing, created=False)
+
         message = self.messages.add_message(
             conversation=conversation,
             sender_user_id=actor_user_id,
             client_message_id=client_message_id,
             body=body,
         )
+        participants = await self.conversations.participants_for(conversation.id)
+        self.deliveries.add_recipients(message=message, participants=participants)
         self.audit.add(
             AuditEventDraft(
                 actor_user_id=actor_user_id,
@@ -395,6 +495,7 @@ class SendMessageService:
                 aggregate_type="conversation",
                 aggregate_id=str(conversation.id),
                 event_type="comms.message.created.v1",
+                aggregate_version=message.sequence,
                 correlation_id=request_id,
                 payload={
                     "conversation_id": str(conversation.id),
@@ -486,7 +587,24 @@ class SupportCaseService:
             request_id=request_id,
         )
 
+        remote_initial_message = None
+        if initial_message and initial_message.strip():
+            remote_initial_message = await support_client.send_user_message(
+                case_id=remote_case.case_id,
+                reporter_user_id=requester_user_id,
+                body=initial_message.strip(),
+                idempotency_key=f"{idempotency_key}:initial-message",
+                request_id=request_id,
+            )
+
         case_id = remote_case.case_id
+        existing_case = await self.support_cases.find_by_id(case_id)
+        if existing_case is not None:
+            existing_conversation = await self.conversations.find_by_id(existing_case.conversation_id)
+            if existing_conversation is None:
+                raise RuntimeError("SUPPORT_PROJECTION_INCONSISTENT")
+            return SupportCaseResult(case=existing_case, conversation=existing_conversation)
+
         conversation_id = uuid4()
         conversation = ConversationModel(
             id=conversation_id,
@@ -513,12 +631,13 @@ class SupportCaseService:
             task_type=task.task_type if task else None,
             task_id=task.task_id if task else None,
         )
-        if initial_message and initial_message.strip():
+        if remote_initial_message is not None:
             self.messages.add_message(
                 conversation=conversation,
                 sender_user_id=requester_user_id,
-                client_message_id=idempotency_key or f"support-case-{case_id}",
+                client_message_id=f"{idempotency_key}:initial-message",
                 body=initial_message.strip(),
+                message_id=remote_initial_message.message_id,
             )
         self.audit.add(
             AuditEventDraft(
@@ -541,6 +660,7 @@ class SupportCaseService:
                 aggregate_type="support_case",
                 aggregate_id=str(case_id),
                 event_type="comms.support.case_opened.v1",
+                aggregate_version=1,
                 correlation_id=request_id,
                 payload={
                     "case_id": str(case_id),

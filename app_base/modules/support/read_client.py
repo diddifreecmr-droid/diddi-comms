@@ -49,7 +49,11 @@ class SupportMessageResponse(BaseModel):
 
     message_id: UUID = Field(validation_alias=AliasChoices("message_id", "id"))
     case_id: UUID | None = None
+    author_type: str = "user"
+    author_id: str
+    body: str
     visibility: str = "user_visible"
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -164,7 +168,7 @@ class DiddiSupportReadClient:
         self,
         *,
         case_id: UUID,
-        author_id: UUID,
+        reporter_user_id: UUID,
         body: str,
         idempotency_key: str,
         request_id: str | None = None,
@@ -173,9 +177,7 @@ class DiddiSupportReadClient:
         headers = self._headers(token, request_id=request_id)
         headers["Idempotency-Key"] = idempotency_key
         payload = {
-            "author_type": "user",
-            "author_id": str(author_id),
-            "visibility": "user_visible",
+            "reporter_user_id": str(reporter_user_id),
             "body": body,
         }
         try:
@@ -198,6 +200,17 @@ class DiddiSupportReadClient:
                 raise ApiError(409, "IDEMPOTENCY_CONFLICT", "The Support message idempotency key conflicts.") from exc
             if status == 404:
                 raise ApiError(404, "CASE_NOT_FOUND", "The Support case was not found.") from exc
+            if status == 401:
+                raise ApiError(502, "DIDDISUPPORT_AUTH_REJECTED", "DiddiSupport rejected the service token.") from exc
+            if status == 403:
+                code = _support_error_code(exc.response)
+                if code == "MESSAGE_AUTHOR_FORBIDDEN":
+                    raise ApiError(403, code, "The user cannot write to this Support case.") from exc
+                raise ApiError(
+                    502,
+                    "DIDDISUPPORT_SCOPE_FORBIDDEN",
+                    "DiddiComms cannot write DiddiSupport messages.",
+                ) from exc
             if status == 503:
                 raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
             raise ApiError(502, "DIDDISUPPORT_REQUEST_REJECTED", "DiddiSupport rejected the message.") from exc
@@ -206,6 +219,45 @@ class DiddiSupportReadClient:
         except (TypeError, ValueError) as exc:
             raise ApiError(
                 502, "DIDDISUPPORT_INVALID_RESPONSE", "DiddiSupport returned an invalid message response."
+            ) from exc
+
+    async def list_user_visible_messages(self, case_id: UUID) -> list[SupportMessageResponse]:
+        token = await self.config.service_token_client.access_token(self.config.scope)
+        headers = self._headers(token)
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.config.base_url.rstrip("/"),
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response = await client.get(
+                    f"/support/v1/internal/cases/{case_id}/messages",
+                    headers=headers,
+                )
+                response.raise_for_status()
+                response_body = response.json()
+            if not isinstance(response_body, list):
+                raise ValueError("response is not a list")
+            messages = [SupportMessageResponse.model_validate(item) for item in response_body]
+            return [message for message in messages if message.visibility == "user_visible"]
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 404:
+                raise ApiError(404, "CASE_NOT_FOUND", "The Support case was not found.") from exc
+            if status in {401, 403}:
+                raise ApiError(
+                    502,
+                    "DIDDISUPPORT_AUTH_REJECTED",
+                    "DiddiSupport rejected the service identity.",
+                ) from exc
+            if status == 503:
+                raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
+            raise ApiError(502, "DIDDISUPPORT_REQUEST_REJECTED", "DiddiSupport rejected the message read.") from exc
+        except httpx.RequestError as exc:
+            raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
+        except (TypeError, ValueError) as exc:
+            raise ApiError(
+                502, "DIDDISUPPORT_INVALID_RESPONSE", "DiddiSupport returned an invalid message list."
             ) from exc
 
     async def _get(self, path: str) -> dict[str, Any]:
@@ -250,3 +302,10 @@ class DiddiSupportReadClient:
             "X-Client-ID": self.config.client_id,
             "X-Request-ID": request_id or current_request_id() or str(uuid4()),
         }
+
+
+def _support_error_code(response: httpx.Response) -> str | None:
+    with suppress(ValueError, AttributeError, TypeError):
+        payload = response.json()
+        return payload.get("detail", {}).get("code") or payload.get("error", {}).get("code")
+    return None

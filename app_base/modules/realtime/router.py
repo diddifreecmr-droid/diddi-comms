@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import time
+from collections import defaultdict
+from contextlib import suppress
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -8,12 +12,45 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app_base.core.auth_deps import AuthenticatedUser
 from app_base.core.database import async_session_factory
 from app_base.core.errors import ApiError
+from app_base.core.metrics import increment, set_gauge
 from app_base.core.redis import create_redis
 from app_base.core.security import FreeIDTokenVerifier
+from app_base.core.settings import settings
 from app_base.modules.conversations.infra.repositories import ConversationRepository
 from app_base.modules.events.domain import DIDDICOMMS_EVENTS_STREAM
 
 router = APIRouter(tags=["realtime"])
+
+
+class ConnectionRegistry:
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._by_user: dict[UUID, int] = defaultdict(int)
+        self._by_conversation: dict[UUID, int] = defaultdict(int)
+
+    async def acquire(self, *, user_id: UUID, conversation_id: UUID) -> bool:
+        async with self._lock:
+            if self._by_user[user_id] >= settings.websocket_max_connections_per_user:
+                return False
+            if self._by_conversation[conversation_id] >= settings.websocket_max_connections_per_conversation:
+                return False
+            self._by_user[user_id] += 1
+            self._by_conversation[conversation_id] += 1
+            set_gauge("diddicomms_websocket_active_connections", sum(self._by_user.values()))
+            return True
+
+    async def release(self, *, user_id: UUID, conversation_id: UUID) -> None:
+        async with self._lock:
+            self._by_user[user_id] = max(self._by_user[user_id] - 1, 0)
+            self._by_conversation[conversation_id] = max(self._by_conversation[conversation_id] - 1, 0)
+            if self._by_user[user_id] == 0:
+                del self._by_user[user_id]
+            if self._by_conversation[conversation_id] == 0:
+                del self._by_conversation[conversation_id]
+            set_gauge("diddicomms_websocket_active_connections", sum(self._by_user.values()))
+
+
+connection_registry = ConnectionRegistry()
 
 
 @router.websocket("/ws")
@@ -27,11 +64,65 @@ async def websocket_events(websocket: WebSocket) -> None:
         await websocket.close(code=4401 if isinstance(exc, ApiError) and exc.status_code == 401 else 4403)
         return
 
+    if not await connection_registry.acquire(user_id=user.user_id, conversation_id=conversation_id):
+        increment("diddicomms_websocket_connections_total", {"outcome": "limited"})
+        await websocket.close(code=4429, reason="connection limit reached")
+        return
+    increment("diddicomms_websocket_connections_total", {"outcome": "accepted"})
+
     redis = create_redis()
     stream_id = websocket.query_params.get("after_event_id", "$")
+    last_client_activity = time.monotonic()
     try:
+        try:
+            cursor_trimmed = stream_id != "$" and await _cursor_is_trimmed(redis, stream_id)
+        except ApiError:
+            await websocket.send_json({"type": "resync_required", "reason": "stream_cursor_invalid"})
+            await websocket.close(code=4400, reason="invalid stream cursor")
+            return
+        if cursor_trimmed:
+            increment("diddicomms_websocket_connections_total", {"outcome": "resync_required"})
+            await websocket.send_json(
+                {
+                    "type": "resync_required",
+                    "reason": "stream_cursor_trimmed",
+                    "resync_path": f"/comms/v1/conversations/{conversation_id}/messages?after_seq=0",
+                }
+            )
+            await websocket.close(code=4409, reason="stream cursor trimmed")
+            return
         while True:
-            entries = await redis.xread({DIDDICOMMS_EVENTS_STREAM: stream_id}, count=100, block=15000)
+            read_task = asyncio.create_task(
+                redis.xread(
+                    {DIDDICOMMS_EVENTS_STREAM: stream_id},
+                    count=100,
+                    block=settings.websocket_heartbeat_seconds * 1000,
+                )
+            )
+            receive_task = asyncio.create_task(websocket.receive_text())
+            done, pending = await asyncio.wait(
+                {read_task, receive_task},
+                timeout=settings.websocket_heartbeat_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            for task in pending:
+                with suppress(asyncio.CancelledError):
+                    await task
+
+            if receive_task in done:
+                receive_task.result()
+                last_client_activity = time.monotonic()
+                continue
+
+            entries = read_task.result() if read_task in done else []
+            if not entries:
+                if time.monotonic() - last_client_activity >= settings.websocket_idle_timeout_seconds:
+                    await websocket.close(code=4408, reason="idle timeout")
+                    return
+                await websocket.send_json({"type": "heartbeat"})
+                continue
             for _, stream_entries in entries:
                 for event_id, fields in stream_entries:
                     stream_id = event_id
@@ -41,6 +132,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         return
     finally:
+        await connection_registry.release(user_id=user.user_id, conversation_id=conversation_id)
         await redis.aclose()
 
 
@@ -70,6 +162,8 @@ def _event_for_conversation(event_id: str, fields: dict[str, str], conversation_
     event_type = fields.get("event_type", "")
     if event_type not in {
         "comms.message.created.v1",
+        "comms.message.delivered.v1",
+        "comms.message.read.v1",
         "comms.support.message.created.v1",
         "comms.conversation.read_cursor_changed.v1",
     }:
@@ -86,3 +180,22 @@ def _event_for_conversation(event_id: str, fields: dict[str, str], conversation_
         "event_version": int(fields.get("event_version", "1")),
         "payload": payload,
     }
+
+
+async def _cursor_is_trimmed(redis, stream_id: str) -> bool:
+    try:
+        oldest_entries = await redis.xrange(DIDDICOMMS_EVENTS_STREAM, min="-", max="+", count=1)
+    except Exception:
+        return False
+    if not oldest_entries:
+        return False
+    oldest_id = str(oldest_entries[0][0])
+    return _stream_id_tuple(stream_id) < _stream_id_tuple(oldest_id)
+
+
+def _stream_id_tuple(stream_id: str) -> tuple[int, int]:
+    try:
+        milliseconds, sequence = stream_id.split("-", maxsplit=1)
+        return int(milliseconds), int(sequence)
+    except (TypeError, ValueError) as exc:
+        raise ApiError(422, "STREAM_CURSOR_INVALID", "Realtime stream cursor is invalid.") from exc

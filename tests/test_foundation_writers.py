@@ -44,6 +44,7 @@ def test_outbox_writer_adds_event() -> None:
             aggregate_type="conversation",
             aggregate_id="11111111-1111-1111-1111-111111111111",
             event_type="comms.conversation.opened",
+            aggregate_version=3,
             correlation_id="request-id",
             causation_id=UUID("22222222-2222-2222-2222-222222222222"),
             payload={"task_type": "ride"},
@@ -51,6 +52,7 @@ def test_outbox_writer_adds_event() -> None:
     )
 
     assert event.event_version == 1
+    assert event.aggregate_version == 3
     assert event.payload == {"task_type": "ride"}
     assert event.correlation_id == "request-id"
     session.add.assert_called_once_with(event)

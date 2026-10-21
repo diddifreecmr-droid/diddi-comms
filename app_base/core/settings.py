@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     alembic_database_url: str = "postgresql+psycopg://diddicomms:diddicomms@localhost:15442/diddicomms_local"
     redis_url: str = "redis://localhost:16442/0"
     redis_key_prefix: str = "diddicomms"
+    support_events_redis_url: str = ""
 
     metrics_bearer_token: str = "local-dev-metrics-token"
 
@@ -48,6 +49,23 @@ class Settings(BaseSettings):
     task_conversation_grace_minutes: int = Field(default=60, ge=0)
     message_retention_days: int = Field(default=180, gt=0)
     outbox_max_attempts: int = Field(default=5, ge=1, le=20)
+    worker_retry_max_seconds: int = Field(default=30, ge=1, le=300)
+    worker_metrics_refresh_seconds: int = Field(default=10, ge=1, le=300)
+    websocket_heartbeat_seconds: int = Field(default=15, ge=5, le=120)
+    websocket_idle_timeout_seconds: int = Field(default=90, ge=15, le=900)
+    websocket_max_connections_per_user: int = Field(default=5, ge=1, le=50)
+    websocket_max_connections_per_conversation: int = Field(default=200, ge=1, le=5000)
+    support_events_stream: str = "diddisupport.events"
+    support_events_consumer_group: str = "diddicomms"
+    support_events_consumer_name: str = ""
+    inbound_events_dlq_stream: str = "diddicomms.inbound.dlq"
+    event_consumer_max_attempts: int = Field(default=5, ge=1, le=20)
+    event_consumer_reclaim_idle_ms: int = Field(default=60_000, ge=1_000)
+    message_rate_limit_per_minute: int = Field(default=30, ge=1, le=1000)
+    call_rate_limit_per_five_minutes: int = Field(default=5, ge=1, le=100)
+    support_case_rate_limit_per_hour: int = Field(default=10, ge=1, le=100)
+    events_stream_maxlen: int = Field(default=100_000, ge=1_000)
+    events_dlq_stream_maxlen: int = Field(default=10_000, ge=100)
 
     @model_validator(mode="after")
     def validate_security_baseline(self) -> Settings:
@@ -55,6 +73,8 @@ class Settings(BaseSettings):
             raise ValueError("API_PREFIX must remain /comms/v1 for the DiddiComms MVP contract")
         if self.environment == "production" and self.metrics_bearer_token == "local-dev-metrics-token":
             raise ValueError("production must not use the local development metrics token")
+        if self.websocket_idle_timeout_seconds <= self.websocket_heartbeat_seconds:
+            raise ValueError("WEBSOCKET_IDLE_TIMEOUT_SECONDS must exceed WEBSOCKET_HEARTBEAT_SECONDS")
         return self
 
     def redis_key(self, suffix: str) -> str:

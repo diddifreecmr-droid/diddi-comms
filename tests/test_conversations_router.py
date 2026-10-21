@@ -147,7 +147,7 @@ def test_send_message_route_returns_message(send_message_client) -> None:
         "client_message_id": "client-1",
         "body": "Hello",
         "moderation_status": "accepted",
-        "delivery_status": "pending",
+        "delivery_status": "accepted",
         "created": True,
     }
 
@@ -197,3 +197,148 @@ def test_mark_conversation_read_route_returns_cursor(read_cursor_client) -> None
         "conversation_id": str(CONVERSATION_ID),
         "read_seq": 7,
     }
+
+
+def test_send_message_does_not_reveal_private_conversation_existence(send_message_client, monkeypatch) -> None:
+    async def denied(self, **kwargs):
+        raise PermissionError("ACTOR_NOT_TASK_PARTICIPANT")
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.SendMessageService.send",
+        denied,
+    )
+    denied_response = send_message_client.post(
+        f"/comms/v1/conversations/{CONVERSATION_ID}/messages",
+        json={"client_message_id": "client-1", "body": "Hello"},
+    )
+
+    async def missing(self, **kwargs):
+        raise LookupError("CONVERSATION_NOT_FOUND")
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.SendMessageService.send",
+        missing,
+    )
+    missing_response = send_message_client.post(
+        f"/comms/v1/conversations/{CONVERSATION_ID}/messages",
+        json={"client_message_id": "client-1", "body": "Hello"},
+    )
+
+    assert denied_response.status_code == missing_response.status_code == 404
+    assert denied_response.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
+    assert missing_response.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
+
+
+def test_recipient_can_acknowledge_message_delivery(monkeypatch) -> None:
+    async def fake_user():
+        return AuthenticatedUser(user_id=PASSENGER_ID)
+
+    async def fake_session():
+        return object()
+
+    async def fake_acknowledge(
+        self,
+        *,
+        conversation_id,
+        message_id,
+        recipient_user_id,
+        status,
+        request_id=None,
+    ):
+        assert recipient_user_id == PASSENGER_ID
+        assert status == "read"
+        return SimpleNamespace(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            status="read",
+            changed=True,
+        )
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.MessageDeliveryService.acknowledge",
+        fake_acknowledge,
+    )
+    app.dependency_overrides[require_current_user] = fake_user
+    app.dependency_overrides[get_session] = fake_session
+    try:
+        response = TestClient(app).post(
+            f"/comms/v1/conversations/{CONVERSATION_ID}/messages/{MESSAGE_ID}/delivery",
+            json={"status": "read"},
+        )
+    finally:
+        app.dependency_overrides.pop(require_current_user, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "conversation_id": str(CONVERSATION_ID),
+        "message_id": str(MESSAGE_ID),
+        "status": "read",
+        "changed": True,
+    }
+
+
+def test_user_can_mute_and_report_without_exposing_report_details(monkeypatch) -> None:
+    report_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+    async def fake_user():
+        return AuthenticatedUser(user_id=PASSENGER_ID)
+
+    async def fake_session():
+        return object()
+
+    async def fake_mute(self, *, conversation_id, user_id, muted, request_id=None):
+        return SimpleNamespace(muted=muted)
+
+    async def fake_report(
+        self,
+        *,
+        conversation_id,
+        message_id,
+        reporter_user_id,
+        category,
+        details,
+        idempotency_key,
+        request_id=None,
+    ):
+        assert details == "Private report details"
+        return SimpleNamespace(
+            created=True,
+            report=SimpleNamespace(
+                id=report_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                category=category,
+                status="open",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.ConversationSafetyService.set_muted",
+        fake_mute,
+    )
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.ConversationSafetyService.report_message",
+        fake_report,
+    )
+    app.dependency_overrides[require_current_user] = fake_user
+    app.dependency_overrides[get_session] = fake_session
+    try:
+        client = TestClient(app)
+        mute_response = client.put(
+            f"/comms/v1/conversations/{CONVERSATION_ID}/mute",
+            json={"muted": True},
+        )
+        report_response = client.post(
+            f"/comms/v1/conversations/{CONVERSATION_ID}/messages/{MESSAGE_ID}/reports",
+            headers={"Idempotency-Key": "report-1"},
+            json={"category": "unsafe", "details": "Private report details"},
+        )
+    finally:
+        app.dependency_overrides.pop(require_current_user, None)
+        app.dependency_overrides.pop(get_session, None)
+
+    assert mute_response.json() == {"conversation_id": str(CONVERSATION_ID), "muted": True}
+    assert report_response.status_code == 200
+    assert report_response.json()["report_id"] == str(report_id)
+    assert "details" not in report_response.json()

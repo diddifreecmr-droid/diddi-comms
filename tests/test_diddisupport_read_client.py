@@ -160,6 +160,9 @@ async def test_sends_user_message_with_visibility_and_idempotency() -> None:
             json={
                 "message_id": "cccccccc-3333-3333-3333-cccccccccccc",
                 "case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+                "author_type": "user",
+                "author_id": "22222222-2222-2222-2222-222222222222",
+                "body": "Le problème continue.",
                 "visibility": "user_visible",
             },
         )
@@ -167,7 +170,7 @@ async def test_sends_user_message_with_visibility_and_idempotency() -> None:
     client, token_client = make_client(handler)
     result = await client.send_user_message(
         case_id=UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"),
-        author_id=UUID("22222222-2222-2222-2222-222222222222"),
+        reporter_user_id=UUID("22222222-2222-2222-2222-222222222222"),
         body="Le problème continue.",
         idempotency_key="support-message-1",
     )
@@ -177,9 +180,41 @@ async def test_sends_user_message_with_visibility_and_idempotency() -> None:
     assert seen.url.path == "/support/v1/internal/cases/aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa/messages"
     assert seen.headers["Idempotency-Key"] == "support-message-1"
     assert json.loads(seen.content) == {
-        "author_type": "user",
-        "author_id": "22222222-2222-2222-2222-222222222222",
-        "visibility": "user_visible",
+        "reporter_user_id": "22222222-2222-2222-2222-222222222222",
         "body": "Le problème continue.",
     }
     assert result.message_id == UUID("cccccccc-3333-3333-3333-cccccccccccc")
+
+
+@pytest.mark.asyncio
+async def test_reads_only_user_visible_support_messages() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "id": "cccccccc-3333-3333-3333-cccccccccccc",
+                    "case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+                    "author_type": "user",
+                    "author_id": "22222222-2222-2222-2222-222222222222",
+                    "body": "Visible",
+                    "visibility": "user_visible",
+                    "created_at": "2026-10-20T12:00:00Z",
+                },
+                {
+                    "id": "dddddddd-4444-4444-4444-dddddddddddd",
+                    "case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+                    "author_type": "agent",
+                    "author_id": "33333333-3333-3333-3333-333333333333",
+                    "body": "Never expose this",
+                    "visibility": "internal_note",
+                    "created_at": "2026-10-20T12:01:00Z",
+                },
+            ],
+        )
+
+    client, token_client = make_client(handler)
+    result = await client.list_user_visible_messages(UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"))
+
+    assert token_client.scopes == ["diddi-support:cases:read"]
+    assert [message.body for message in result] == ["Visible"]

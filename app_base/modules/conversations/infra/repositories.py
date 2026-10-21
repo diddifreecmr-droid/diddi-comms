@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -12,6 +13,7 @@ from app_base.modules.conversations.infra.models import (
     CallAttemptModel,
     ConversationModel,
     ConversationParticipantModel,
+    MessageDeliveryModel,
     MessageModel,
     SupportCaseModel,
 )
@@ -159,11 +161,12 @@ class MessageRepository:
         sender_user_id: UUID,
         client_message_id: str,
         body: str,
+        message_id: UUID | None = None,
     ) -> MessageModel:
         sequence = int(conversation.last_sequence or 0) + 1
         conversation.last_sequence = sequence
         message = MessageModel(
-            id=uuid4(),
+            id=message_id or uuid4(),
             conversation_id=conversation.id,
             sequence=sequence,
             sender_user_id=sender_user_id,
@@ -187,12 +190,111 @@ class MessageRepository:
         return list(result.scalars().all())
 
 
+class MessageDeliveryRepository:
+    status_order = {"accepted": 0, "delivered": 1, "read": 2, "delivery_failed": 3}
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    def add_recipients(
+        self,
+        *,
+        message: MessageModel,
+        participants: list[ConversationParticipantModel],
+    ) -> list[MessageDeliveryModel]:
+        now = datetime.now(UTC)
+        deliveries = []
+        for participant in participants:
+            if participant.user_id == message.sender_user_id:
+                continue
+            delivery = MessageDeliveryModel(
+                id=uuid4(),
+                message_id=message.id,
+                participant_id=participant.id,
+                channel="realtime",
+                status="accepted",
+                attempted_at=now,
+            )
+            self.session.add(delivery)
+            deliveries.append(delivery)
+        return deliveries
+
+    async def find_for_recipient(
+        self,
+        *,
+        message_id: UUID,
+        recipient_user_id: UUID,
+    ) -> MessageDeliveryModel | None:
+        result = await self.session.execute(
+            select(MessageDeliveryModel)
+            .join(
+                ConversationParticipantModel,
+                ConversationParticipantModel.id == MessageDeliveryModel.participant_id,
+            )
+            .where(
+                MessageDeliveryModel.message_id == message_id,
+                ConversationParticipantModel.user_id == recipient_user_id,
+                ConversationParticipantModel.left_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def find_by_id(self, message_id: UUID) -> MessageModel | None:
+        return await self.session.get(MessageModel, message_id)
+
+    def advance(self, delivery: MessageDeliveryModel, *, status: str) -> bool:
+        if status not in {"delivered", "read"}:
+            raise ValueError("DELIVERY_STATUS_INVALID")
+        current_rank = self.status_order.get(delivery.status, -1)
+        target_rank = self.status_order[status]
+        if current_rank >= target_rank:
+            return False
+        now = datetime.now(UTC)
+        delivery.status = status
+        if status in {"delivered", "read"} and delivery.delivered_at is None:
+            delivery.delivered_at = now
+        if status == "read":
+            delivery.read_at = now
+        return True
+
+    async def statuses_for_messages(self, message_ids: list[UUID]) -> dict[UUID, str]:
+        if not message_ids:
+            return {}
+        result = await self.session.execute(
+            select(MessageDeliveryModel.message_id, MessageDeliveryModel.status).where(
+                MessageDeliveryModel.message_id.in_(message_ids)
+            )
+        )
+        grouped: dict[UUID, list[str]] = {}
+        for message_id, status in result.all():
+            grouped.setdefault(message_id, []).append(status)
+        return {message_id: self._aggregate_status(statuses) for message_id, statuses in grouped.items()}
+
+    @staticmethod
+    def _aggregate_status(statuses: list[str]) -> str:
+        if not statuses:
+            return "accepted"
+        if any(status == "delivery_failed" for status in statuses):
+            return "delivery_failed"
+        if all(status == "read" for status in statuses):
+            return "read"
+        if all(status in {"delivered", "read"} for status in statuses):
+            return "delivered"
+        return "accepted"
+
+
 class SupportCaseRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def find_by_id(self, case_id: UUID) -> SupportCaseModel | None:
         return await self.session.get(SupportCaseModel, case_id)
+
+    async def find_by_conversation(self, conversation_id: UUID) -> SupportCaseModel | None:
+        result = await self.session.execute(
+            select(SupportCaseModel).where(SupportCaseModel.conversation_id == conversation_id)
+        )
+        return result.scalar_one_or_none()
 
     async def list_cases(
         self,
@@ -223,6 +325,8 @@ class SupportCaseRepository:
     ) -> SupportCaseModel:
         case = SupportCaseModel(
             id=case_id,
+            external_case_id=case_id,
+            projection_status="synced",
             conversation_id=conversation_id,
             requester_user_id=requester_user_id,
             owner_service=owner_service,

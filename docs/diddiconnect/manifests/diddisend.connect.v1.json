@@ -1,0 +1,101 @@
+{
+  "$schema": "../diddiconnect.module.v1.schema.json",
+  "protocol": "diddiconnect.module.v1",
+  "manifest_version": "1.0.0",
+  "module": "diddisend",
+  "display_name": "DiddiSend",
+  "status": "proposed",
+  "ownership": {
+    "owns": ["deliveries", "delivery_state", "delivery_participants", "delivery_communication_policy"],
+    "does_not_own": ["conversations", "messages", "call_attempts", "support_cases"]
+  },
+  "identity": {
+    "issuer": "diddifree-id",
+    "audience": "diddisend",
+    "required_service_claims": {"role": "service", "token_type": "service", "status": "active"},
+    "required_headers": ["Authorization", "X-Client-ID", "X-Request-ID", "traceparent"]
+  },
+  "task_contexts": [
+    {
+      "task_type": "delivery",
+      "status": "proposed",
+      "method": "GET",
+      "path": "/internal/v1/comms/tasks/{task_type}/{task_id}",
+      "response_schema": "diddiconnect.task-context.v1",
+      "caller": "diddicomms",
+      "required_scope": "diddisend:comms-task:read",
+      "participant_roles": ["sender", "customer", "recipient", "courier"],
+      "phone_numbers": "call_attempt_only",
+      "completed_grace_config": null,
+      "state_policies": [
+        {
+          "state": "owner_defined",
+          "messaging": "denied",
+          "calling": "denied",
+          "notes": "Draft placeholder. DiddiSend must replace this with every delivery state before promotion to implemented."
+        }
+      ]
+    }
+  ],
+  "support_contexts": [
+    {
+      "resource_type": "delivery",
+      "status": "implemented",
+      "method": "GET",
+      "path": "/internal/v1/support/delivery/{resource_id}/context",
+      "response_protocol": "diddi.context.v1",
+      "caller": "diddisupport",
+      "required_scope": "diddisend:support-context:read",
+      "scope_header": "X-Support-Context-Scope",
+      "redacted_fields": [
+        "participants.phone_e164", "locations.pickup", "locations.dropoff",
+        "payment.provider_details", "security.pickup_pin", "security.delivery_pin"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "peer_module": "diddicomms",
+      "role": "business_context_provider",
+      "direction": "inbound",
+      "status": "proposed",
+      "contract": "docs/integrations/diddisend.md",
+      "audience": "diddisend",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["diddisend:comms-task:read"],
+      "blocking_reason": "The delivery task-context endpoint is not implemented."
+    },
+    {
+      "peer_module": "diddi-support",
+      "role": "support_provider",
+      "direction": "inbound",
+      "status": "implemented",
+      "contract": "docs/integrations/diddisend.md",
+      "audience": "diddisend",
+      "caller_subject": "service:diddisupport",
+      "scopes": ["diddisend:support-context:read"],
+      "blocking_reason": null
+    }
+  ],
+  "events": {
+    "transport": "none",
+    "delivery": "none",
+    "deduplication_key": "none",
+    "ordering": "none",
+    "published": []
+  },
+  "reliability": {
+    "transactional_outbox": false,
+    "inbox_deduplication": false,
+    "retry_after_timeout": "read-only resolver calls are safe to retry",
+    "websocket_is_source_of_truth": false,
+    "readiness_dependencies": ["postgresql"]
+  },
+  "conformance": {
+    "owner_team": "DiddiSend",
+    "openapi_path": "docs/api/openapi.json",
+    "asyncapi_path": null,
+    "contract_test_paths": ["tests/test_support_context_router.py"],
+    "staging_smoke_test": "required"
+  }
+}

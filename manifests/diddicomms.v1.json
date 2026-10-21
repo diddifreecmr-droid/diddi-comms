@@ -1,0 +1,403 @@
+{
+  "$schema": "../docs/diddiconnect/diddiconnect.module.v1.schema.json",
+  "protocol": "diddiconnect.module.v1",
+  "manifest_version": "1.0.0",
+  "module": "diddicomms",
+  "display_name": "DiddiComms",
+  "status": "partial",
+  "ownership": {
+    "owns": [
+      "task_conversations",
+      "task_messages",
+      "message_read_cursors",
+      "call_attempts",
+      "realtime_delivery",
+      "communication_audit",
+      "communication_outbox"
+    ],
+    "does_not_own": [
+      "identities",
+      "rides",
+      "deliveries",
+      "food_orders",
+      "support_cases",
+      "binary_file_storage",
+      "payment_state"
+    ]
+  },
+  "identity": {
+    "issuer": "diddifree-id",
+    "audience": "diddicomms",
+    "required_service_claims": {
+      "role": "service",
+      "token_type": "service",
+      "status": "active"
+    },
+    "required_headers": ["Authorization", "X-Client-ID", "X-Request-ID", "traceparent"]
+  },
+  "task_contexts": [],
+  "support_contexts": [],
+  "connections": [
+    {
+      "peer_module": "diddifree-id",
+      "role": "identity_provider",
+      "direction": "outbound",
+      "status": "implemented",
+      "contract": "docs/integrations/diddifreeid.md",
+      "audience": "diddicomms",
+      "caller_subject": "service:diddicomms",
+      "scopes": [],
+      "blocking_reason": null
+    },
+    {
+      "peer_module": "diddi-support",
+      "role": "support_provider",
+      "direction": "bidirectional",
+      "status": "partial",
+      "contract": "docs/integrations/diddisupport.md",
+      "audience": "diddi-support",
+      "caller_subject": "service:diddicomms",
+      "scopes": [
+        "diddi-support:cases:create",
+        "diddi-support:cases:read",
+        "diddi-support:messages:write"
+      ],
+      "blocking_reason": "The local table is projection-only, but DiddiSupport does not yet publish the approved Redis event stream."
+    },
+    {
+      "peer_module": "diddiadmin",
+      "role": "backoffice_consumer",
+      "direction": "inbound",
+      "status": "partial",
+      "contract": "docs/integrations/diddiadmin.md",
+      "audience": "diddicomms",
+      "caller_subject": "service:diddiadmin",
+      "scopes": [
+        "diddicomms:backoffice:read",
+        "diddicomms:backoffice:write"
+      ],
+      "blocking_reason": "DiddiComms provider routes are implemented; DiddiAdmin must migrate its adapter and complete shared contract tests."
+    },
+    {
+      "peer_module": "diddigo",
+      "role": "business_context_provider",
+      "direction": "outbound",
+      "status": "implemented",
+      "contract": "docs/integrations/diddigo.md",
+      "audience": "diddigo",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["diddigo:comms-task:read"],
+      "blocking_reason": null
+    },
+    {
+      "peer_module": "diddisend",
+      "role": "business_context_provider",
+      "direction": "outbound",
+      "status": "proposed",
+      "contract": "docs/integrations/diddisend.md",
+      "audience": "diddisend",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["diddisend:comms-task:read"],
+      "blocking_reason": "The delivery task-context resolver is not implemented."
+    },
+    {
+      "peer_module": "diddifood",
+      "role": "business_context_provider",
+      "direction": "outbound",
+      "status": "proposed",
+      "contract": "docs/integrations/diddifood.md",
+      "audience": "diddifood",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["diddifood:comms-task:read"],
+      "blocking_reason": "The order task-context resolver is not implemented."
+    },
+    {
+      "peer_module": "diddifiles",
+      "role": "file_provider",
+      "direction": "outbound",
+      "status": "proposed",
+      "contract": "docs/integrations/diddifiles.md",
+      "audience": "diddifiles",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["files:read", "files:write"],
+      "blocking_reason": "Media messages are outside the text-only MVP and the final scope is not provisioned."
+    },
+    {
+      "peer_module": "diddipay",
+      "role": "payment_provider",
+      "direction": "outbound",
+      "status": "proposed",
+      "contract": "docs/integrations/diddipay.md",
+      "audience": "diddipay",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["diddipay:support-context:read"],
+      "blocking_reason": "Payment context belongs to Support and is not part of task messaging MVP."
+    }
+  ],
+  "http": {
+    "user_routes": [
+      {
+        "method": "POST",
+        "path": "/comms/v1/tasks/{owner_service}/{task_type}/{task_id}/conversation",
+        "operation": "ensure_task_conversation",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "optional",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/conversations/{conversation_id}/messages",
+        "operation": "send_message",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "optional",
+        "status": "implemented"
+      },
+      {
+        "method": "GET",
+        "path": "/comms/v1/conversations/{conversation_id}/messages",
+        "operation": "list_messages",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "not_applicable",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/conversations/{conversation_id}/read",
+        "operation": "mark_conversation_read",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "optional",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/conversations/{conversation_id}/messages/{message_id}/delivery",
+        "operation": "acknowledge_message_delivery",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "intrinsic",
+        "status": "implemented"
+      },
+      {
+        "method": "PUT",
+        "path": "/comms/v1/conversations/{conversation_id}/mute",
+        "operation": "set_conversation_muted",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "intrinsic",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/conversations/{conversation_id}/messages/{message_id}/reports",
+        "operation": "report_message_abuse",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "required",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/conversations/{conversation_id}/call-attempts",
+        "operation": "create_call_attempt",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "required",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/conversations/{conversation_id}/call-attempts/{attempt_id}/client-result",
+        "operation": "record_call_client_result",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "optional",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/support/cases",
+        "operation": "open_support_case_compatibility",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "required",
+        "status": "partial",
+        "notes": "DiddiSupport is authoritative; existing legacy projections still require staging reconciliation."
+      }
+    ],
+    "service_routes": [
+      {
+        "method": "POST",
+        "path": "/comms/v1/backoffice/tasks/{owner_service}/{task_type}/{task_id}/conversation",
+        "operation": "ensure_backoffice_task_conversation",
+        "auth": "service_jwt_delegated_operator",
+        "required_scope": "diddicomms:backoffice:read",
+        "idempotency": "required",
+        "status": "implemented"
+      },
+      {
+        "method": "GET",
+        "path": "/comms/v1/backoffice/conversations/{conversation_id}/messages",
+        "operation": "list_backoffice_messages",
+        "auth": "service_jwt_delegated_operator",
+        "required_scope": "diddicomms:backoffice:read",
+        "idempotency": "not_applicable",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/backoffice/conversations/{conversation_id}/messages",
+        "operation": "send_backoffice_message",
+        "auth": "service_jwt_delegated_operator",
+        "required_scope": "diddicomms:backoffice:write",
+        "idempotency": "required",
+        "status": "implemented"
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/backoffice/conversations/{conversation_id}/call-attempts",
+        "operation": "create_backoffice_call_attempt",
+        "auth": "service_jwt_delegated_operator",
+        "required_scope": "diddicomms:backoffice:write",
+        "idempotency": "required",
+        "status": "implemented"
+      },
+      {
+        "method": "GET",
+        "path": "/comms/v1/support/cases",
+        "operation": "list_support_cases_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:support-cases:read",
+        "idempotency": "not_applicable",
+        "status": "partial",
+        "notes": "Reads the local compatibility projection; reconciliation is available."
+      },
+      {
+        "method": "GET",
+        "path": "/comms/v1/support/cases/{case_id}",
+        "operation": "get_support_case_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:support-cases:read",
+        "idempotency": "not_applicable",
+        "status": "partial",
+        "notes": "Reads the local compatibility projection; reconciliation is available."
+      },
+      {
+        "method": "GET",
+        "path": "/comms/v1/support/cases/{case_id}/messages",
+        "operation": "list_support_case_messages_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:support-cases:read",
+        "idempotency": "not_applicable",
+        "status": "implemented",
+        "notes": "Proxies DiddiSupport user-visible history and excludes internal notes."
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/support/cases/{case_id}/assign",
+        "operation": "assign_support_case_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:support-cases:write",
+        "idempotency": "optional",
+        "status": "deprecated",
+        "notes": "Returns 410 DIDDISUPPORT_BACKOFFICE_REQUIRED."
+      },
+      {
+        "method": "PATCH",
+        "path": "/comms/v1/support/cases/{case_id}/priority",
+        "operation": "update_support_case_priority_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:support-cases:write",
+        "idempotency": "optional",
+        "status": "deprecated",
+        "notes": "Returns 410 DIDDISUPPORT_BACKOFFICE_REQUIRED."
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/support/cases/{case_id}/messages",
+        "operation": "send_support_agent_message_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:messages:write",
+        "idempotency": "optional",
+        "status": "deprecated",
+        "notes": "Returns 410 DIDDISUPPORT_BACKOFFICE_REQUIRED."
+      },
+      {
+        "method": "POST",
+        "path": "/comms/v1/support/cases/{case_id}/resolve",
+        "operation": "resolve_support_case_compatibility",
+        "auth": "service_jwt",
+        "required_scope": "diddicomms:support-cases:write",
+        "idempotency": "optional",
+        "status": "deprecated",
+        "notes": "Returns 410 DIDDISUPPORT_BACKOFFICE_REQUIRED."
+      }
+    ]
+  },
+  "websockets": [
+    {
+      "path": "/comms/v1/ws?conversation_id={conversation_id}&after_event_id={stream_id}",
+      "auth": "user_jwt",
+      "status": "partial",
+      "resync_route": "/comms/v1/conversations/{conversation_id}/messages?after_seq={sequence}",
+      "events": [
+        "comms.message.created.v1",
+        "comms.message.delivered.v1",
+        "comms.message.read.v1",
+        "comms.support.message.created.v1",
+        "comms.conversation.read_cursor_changed.v1"
+      ]
+    }
+  ],
+  "events": {
+    "transport": "redis_streams",
+    "delivery": "at_least_once",
+    "deduplication_key": "event_id",
+    "ordering": "none",
+    "stream_name": "diddicomms.events",
+    "dead_letter_stream": "diddicomms.events.dlq",
+    "published": [
+      {"name": "comms.conversation.created.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.conversation.read_cursor_changed.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.message.created.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.message.delivered.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.message.read.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.message.abuse_reported.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.call_attempt.created.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.call_attempt.client_result_recorded.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
+      {"name": "comms.support.case_opened.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
+      {"name": "comms.support.message.created.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
+      {"name": "comms.support.case_resolved.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"}
+    ],
+    "consumed": [
+      "support.case.message.created.v1",
+      "support.case.updated.v1",
+      "support.case.assigned.v1",
+      "support.case.resolved.v1"
+    ]
+  },
+  "reliability": {
+    "transactional_outbox": true,
+    "inbox_deduplication": true,
+    "retry_after_timeout": "outbox and inbound consumers use bounded retry, pending reclaim, idempotency, and privacy-safe Redis DLQs",
+    "websocket_is_source_of_truth": false,
+    "readiness_dependencies": ["postgresql", "redis"]
+  },
+  "conformance": {
+    "owner_team": "DiddiComms",
+    "openapi_path": "runtime:/openapi.json",
+    "asyncapi_path": null,
+    "contract_test_paths": [
+      "tests/test_diddiconnect_manifests.py",
+      "tests/test_context_resolver_client.py",
+      "tests/test_diddisupport_read_client.py",
+      "tests/test_backoffice_router.py",
+      "tests/test_event_consumer.py",
+      "tests/test_realtime_router.py"
+    ],
+    "staging_smoke_test": "required"
+  }
+}

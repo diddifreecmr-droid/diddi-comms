@@ -52,7 +52,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://diddicomms:diddicomms@postgres:5432/diddicomms_local
       ALEMBIC_DATABASE_URL: postgresql+psycopg://diddicomms:diddicomms@postgres:5432/diddicomms_local
       REDIS_URL: redis://redis:6379/0
+      SUPPORT_EVENTS_REDIS_URL: redis://host.docker.internal:${DIDDISUPPORT_REDIS_HOST_PORT:-16382}/0
     command: ["python", "-m", "app_base.modules.events.worker"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy

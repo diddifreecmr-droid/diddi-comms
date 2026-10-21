@@ -23,6 +23,7 @@ class OutboxEventModel(Base):
     aggregate_id: Mapped[str] = mapped_column(Text, nullable=False)
     event_type: Mapped[str] = mapped_column(Text, nullable=False)
     event_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     correlation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     causation_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)

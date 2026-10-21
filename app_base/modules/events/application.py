@@ -19,10 +19,10 @@ class OutboxWriter:
             aggregate_id=draft.aggregate_id,
             event_type=draft.event_type,
             event_version=draft.event_version,
+            aggregate_version=draft.aggregate_version,
             payload=draft.payload,
             correlation_id=draft.correlation_id,
             causation_id=draft.causation_id,
         )
         self.session.add(event)
         return event
-

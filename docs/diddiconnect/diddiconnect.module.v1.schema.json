@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.diddifree.com/diddiconnect/diddiconnect.module.v1.schema.json",
+  "title": "DiddiConnect module integration manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "protocol",
+    "manifest_version",
+    "module",
+    "display_name",
+    "status",
+    "ownership",
+    "identity",
+    "task_contexts",
+    "connections",
+    "events",
+    "reliability",
+    "conformance"
+  ],
+  "properties": {
+    "$schema": {"type": "string", "minLength": 1},
+    "protocol": {"const": "diddiconnect.module.v1"},
+    "manifest_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
+    "module": {"type": "string", "pattern": "^diddi[a-z0-9-]+$"},
+    "display_name": {"type": "string", "minLength": 1},
+    "status": {"$ref": "#/$defs/integrationStatus"},
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owns", "does_not_own"],
+      "properties": {
+        "owns": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "does_not_own": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["issuer", "audience", "required_service_claims", "required_headers"],
+      "properties": {
+        "issuer": {"const": "diddifree-id"},
+        "audience": {"type": "string", "minLength": 1},
+        "required_service_claims": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "token_type", "status"],
+          "properties": {
+            "role": {"const": "service"},
+            "token_type": {"const": "service"},
+            "status": {"const": "active"}
+          }
+        },
+        "required_headers": {
+          "type": "array",
+          "items": {"enum": ["Authorization", "X-Client-ID", "X-Request-ID", "traceparent"]},
+          "minItems": 3,
+          "uniqueItems": true,
+          "allOf": [
+            {"contains": {"const": "Authorization"}},
+            {"contains": {"const": "X-Client-ID"}},
+            {"contains": {"const": "X-Request-ID"}}
+          ]
+        }
+      }
+    },
+    "task_contexts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/taskContext"},
+      "uniqueItems": true
+    },
+    "support_contexts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/supportContext"},
+      "uniqueItems": true,
+      "default": []
+    },
+    "connections": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/connection"},
+      "minItems": 1
+    },
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "user_routes": {"type": "array", "items": {"$ref": "#/$defs/route"}},
+        "service_routes": {"type": "array", "items": {"$ref": "#/$defs/route"}}
+      }
+    },
+    "websockets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "auth", "status", "resync_route"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^/"},
+          "auth": {"const": "user_jwt"},
+          "status": {"$ref": "#/$defs/integrationStatus"},
+          "resync_route": {"type": "string", "pattern": "^/"},
+          "events": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport", "delivery", "deduplication_key", "ordering", "published"],
+      "properties": {
+        "transport": {"enum": ["redis_streams", "none"]},
+        "delivery": {"enum": ["at_least_once", "none"]},
+        "deduplication_key": {"enum": ["event_id", "none"]},
+        "ordering": {"enum": ["aggregate_version", "none"]},
+        "stream_name": {"type": ["string", "null"]},
+        "dead_letter_stream": {"type": ["string", "null"]},
+        "published": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "schema", "status"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z0-9-]+\\.[a-z0-9_.-]+\\.v[1-9][0-9]*$"},
+              "schema": {"type": "string", "minLength": 1},
+              "status": {"$ref": "#/$defs/integrationStatus"}
+            }
+          }
+        },
+        "consumed": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "reliability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transactional_outbox", "inbox_deduplication", "retry_after_timeout",
+        "websocket_is_source_of_truth", "readiness_dependencies"
+      ],
+      "properties": {
+        "transactional_outbox": {"type": "boolean"},
+        "inbox_deduplication": {"type": "boolean"},
+        "retry_after_timeout": {"type": "string", "minLength": 1},
+        "websocket_is_source_of_truth": {"const": false},
+        "readiness_dependencies": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "conformance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner_team", "openapi_path", "contract_test_paths", "staging_smoke_test"],
+      "properties": {
+        "owner_team": {"type": "string", "minLength": 1},
+        "openapi_path": {"type": "string", "minLength": 1},
+        "asyncapi_path": {"type": ["string", "null"]},
+        "contract_test_paths": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "staging_smoke_test": {"enum": ["required", "passed"]}
+      }
+    }
+  },
+  "$defs": {
+    "integrationStatus": {"enum": ["proposed", "partial", "implemented", "blocked", "deprecated"]},
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "operation", "auth", "idempotency", "status"],
+      "properties": {
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
+        "path": {"type": "string", "pattern": "^/"},
+        "operation": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "auth": {
+          "enum": ["user_jwt", "service_jwt", "service_jwt_delegated_operator", "public", "metrics_token"]
+        },
+        "required_scope": {"type": ["string", "null"]},
+        "idempotency": {"enum": ["required", "optional", "intrinsic", "not_applicable"]},
+        "status": {"$ref": "#/$defs/integrationStatus"},
+        "notes": {"type": "string"}
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peer_module", "role", "direction", "status", "contract",
+        "audience", "caller_subject", "scopes"
+      ],
+      "properties": {
+        "peer_module": {"type": "string", "pattern": "^diddi[a-z0-9-]+$"},
+        "role": {
+          "enum": [
+            "identity_provider", "business_context_provider", "support_provider",
+            "backoffice_consumer", "file_provider", "payment_provider"
+          ]
+        },
+        "direction": {"enum": ["inbound", "outbound", "bidirectional"]},
+        "status": {"$ref": "#/$defs/integrationStatus"},
+        "contract": {"type": "string", "minLength": 1},
+        "audience": {"type": "string", "minLength": 1},
+        "caller_subject": {"type": "string", "minLength": 1},
+        "scopes": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "blocking_reason": {"type": ["string", "null"]}
+      }
+    },
+    "communicationMode": {"enum": ["allowed", "denied", "until_closes_at"]},
+    "statePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "messaging", "calling"],
+      "properties": {
+        "state": {"type": "string", "minLength": 1},
+        "messaging": {"$ref": "#/$defs/communicationMode"},
+        "calling": {"$ref": "#/$defs/communicationMode"},
+        "notes": {"type": "string"}
+      }
+    },
+    "taskContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_type", "status", "method", "path", "response_schema",
+        "caller", "required_scope", "participant_roles", "phone_numbers",
+        "state_policies"
+      ],
+      "properties": {
+        "task_type": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "status": {"$ref": "#/$defs/integrationStatus"},
+        "method": {"const": "GET"},
+        "path": {"const": "/internal/v1/comms/tasks/{task_type}/{task_id}"},
+        "response_schema": {"const": "diddiconnect.task-context.v1"},
+        "caller": {"const": "diddicomms"},
+        "required_scope": {"type": "string", "pattern": "^diddi[a-z0-9-]+:comms-task:read$"},
+        "participant_roles": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "phone_numbers": {"enum": ["prohibited", "call_attempt_only"]},
+        "state_policies": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/statePolicy"},
+          "minItems": 1
+        },
+        "completed_grace_config": {"type": ["string", "null"]}
+      }
+    },
+    "supportContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource_type", "status", "method", "path", "response_protocol",
+        "caller", "required_scope", "scope_header", "redacted_fields"
+      ],
+      "properties": {
+        "resource_type": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "status": {"$ref": "#/$defs/integrationStatus"},
+        "method": {"const": "GET"},
+        "path": {"type": "string", "pattern": "^/internal/v1/support/.+\\{resource_id\\}/context$"},
+        "response_protocol": {"const": "diddi.context.v1"},
+        "caller": {"const": "diddisupport"},
+        "required_scope": {"type": "string", "pattern": "^diddi[a-z0-9-]+:support-context:read$"},
+        "scope_header": {"const": "X-Support-Context-Scope"},
+        "redacted_fields": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

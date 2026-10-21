@@ -1,0 +1,12 @@
+{
+  "status": "proposed",
+  "service_subject": "service:diddiadmin",
+  "audience": "diddicomms",
+  "scope": "diddicomms:backoffice:read",
+  "headers": {
+    "X-Client-ID": "diddiadmin-staging-diddicomms",
+    "X-Request-ID": "44444444-4444-4444-4444-444444444444",
+    "X-Backoffice-Actor": "88888888-8888-8888-8888-888888888888",
+    "X-Backoffice-Reason": "support-case:99999999-9999-9999-9999-999999999999"
+  }
+}

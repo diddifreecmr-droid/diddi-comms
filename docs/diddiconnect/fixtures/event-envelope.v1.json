@@ -1,0 +1,17 @@
+{
+  "event_id": "55555555-5555-5555-5555-555555555555",
+  "event_type": "comms.message.created.v1",
+  "event_version": 1,
+  "occurred_at": "2026-10-20T12:00:00Z",
+  "producer": "diddicomms",
+  "aggregate_type": "conversation",
+  "aggregate_id": "66666666-6666-6666-6666-666666666666",
+  "aggregate_version": 13,
+  "correlation_id": "44444444-4444-4444-4444-444444444444",
+  "causation_id": "",
+  "payload": {
+    "conversation_id": "66666666-6666-6666-6666-666666666666",
+    "message_id": "77777777-7777-7777-7777-777777777777",
+    "sequence": 13
+  }
+}

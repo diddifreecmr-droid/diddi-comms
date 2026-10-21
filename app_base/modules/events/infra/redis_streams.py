@@ -7,6 +7,7 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from app_base.core.settings import settings
 from app_base.modules.events.domain import DIDDICOMMS_EVENTS_DLQ_STREAM, DIDDICOMMS_EVENTS_STREAM
 
 
@@ -18,6 +19,7 @@ class StreamEvent:
     aggregate_id: str
     payload: dict = field(default_factory=dict)
     event_version: int = 1
+    aggregate_version: int = 0
     producer: str = "diddicomms"
     correlation_id: str | None = None
     causation_id: UUID | None = None
@@ -28,6 +30,7 @@ class StreamEvent:
             "event_id": str(self.event_id),
             "event_type": self.event_type,
             "event_version": str(self.event_version),
+            "aggregate_version": str(self.aggregate_version),
             "occurred_at": _iso(self.occurred_at),
             "producer": self.producer,
             "aggregate_type": self.aggregate_type,
@@ -44,13 +47,23 @@ class RedisStreamPublisher:
         self.stream_name = stream_name
 
     async def publish(self, event: StreamEvent) -> str:
-        entry_id = await self.redis.xadd(self.stream_name, event.to_stream_fields())
+        entry_id = await self.redis.xadd(
+            self.stream_name,
+            event.to_stream_fields(),
+            maxlen=settings.events_stream_maxlen,
+            approximate=True,
+        )
         return str(entry_id)
 
     async def publish_dlq(self, event: StreamEvent, *, failure_reason: str) -> str:
         fields = event.to_stream_fields()
         fields["failure_reason"] = failure_reason[:500]
-        entry_id = await self.redis.xadd(DIDDICOMMS_EVENTS_DLQ_STREAM, fields)
+        entry_id = await self.redis.xadd(
+            DIDDICOMMS_EVENTS_DLQ_STREAM,
+            fields,
+            maxlen=settings.events_dlq_stream_maxlen,
+            approximate=True,
+        )
         return str(entry_id)
 
 

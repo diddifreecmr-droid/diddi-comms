@@ -1,0 +1,105 @@
+{
+  "$schema": "../diddiconnect.module.v1.schema.json",
+  "protocol": "diddiconnect.module.v1",
+  "manifest_version": "1.0.0",
+  "module": "diddigo",
+  "display_name": "DiddiGo",
+  "status": "proposed",
+  "ownership": {
+    "owns": ["rides", "ride_state", "ride_participants", "ride_communication_policy"],
+    "does_not_own": ["conversations", "messages", "call_attempts", "support_cases"]
+  },
+  "identity": {
+    "issuer": "diddifree-id",
+    "audience": "diddigo",
+    "required_service_claims": {"role": "service", "token_type": "service", "status": "active"},
+    "required_headers": ["Authorization", "X-Client-ID", "X-Request-ID", "traceparent"]
+  },
+  "task_contexts": [
+    {
+      "task_type": "ride",
+      "status": "implemented",
+      "method": "GET",
+      "path": "/internal/v1/comms/tasks/{task_type}/{task_id}",
+      "response_schema": "diddiconnect.task-context.v1",
+      "caller": "diddicomms",
+      "required_scope": "diddigo:comms-task:read",
+      "participant_roles": ["passenger", "driver"],
+      "phone_numbers": "call_attempt_only",
+      "completed_grace_config": "RIDE_COMMS_COMPLETED_CHAT_RETENTION_SECONDS",
+      "state_policies": [
+        {"state": "requested", "messaging": "denied", "calling": "denied"},
+        {"state": "driver_assigned", "messaging": "allowed", "calling": "allowed"},
+        {"state": "driver_en_route", "messaging": "allowed", "calling": "allowed"},
+        {"state": "arrived", "messaging": "allowed", "calling": "allowed"},
+        {"state": "in_progress", "messaging": "allowed", "calling": "allowed"},
+        {"state": "waiting", "messaging": "allowed", "calling": "allowed"},
+        {"state": "completed", "messaging": "until_closes_at", "calling": "denied"},
+        {"state": "cancelled_by_passenger", "messaging": "denied", "calling": "denied"},
+        {"state": "cancelled_by_driver", "messaging": "denied", "calling": "denied"},
+        {"state": "no_driver_found", "messaging": "denied", "calling": "denied"}
+      ]
+    }
+  ],
+  "support_contexts": [
+    {
+      "resource_type": "ride",
+      "status": "implemented",
+      "method": "GET",
+      "path": "/internal/v1/support/ride/{resource_id}/context",
+      "response_protocol": "diddi.context.v1",
+      "caller": "diddisupport",
+      "required_scope": "diddigo:support-context:read",
+      "scope_header": "X-Support-Context-Scope",
+      "redacted_fields": [
+        "participants.phone_e164", "locations.pickup", "locations.dropoff",
+        "driver.last_location", "kyc", "payment.provider_details"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "peer_module": "diddicomms",
+      "role": "business_context_provider",
+      "direction": "inbound",
+      "status": "implemented",
+      "contract": "docs/integrations/diddigo.md",
+      "audience": "diddigo",
+      "caller_subject": "service:diddicomms",
+      "scopes": ["diddigo:comms-task:read"],
+      "blocking_reason": null
+    },
+    {
+      "peer_module": "diddi-support",
+      "role": "support_provider",
+      "direction": "inbound",
+      "status": "implemented",
+      "contract": "docs/integrations/diddigo.md",
+      "audience": "diddigo",
+      "caller_subject": "service:diddisupport",
+      "scopes": ["diddigo:support-context:read"],
+      "blocking_reason": null
+    }
+  ],
+  "events": {
+    "transport": "none",
+    "delivery": "none",
+    "deduplication_key": "none",
+    "ordering": "none",
+    "published": []
+  },
+  "reliability": {
+    "transactional_outbox": false,
+    "inbox_deduplication": false,
+    "retry_after_timeout": "read-only resolver calls are safe to retry",
+    "websocket_is_source_of_truth": false,
+    "readiness_dependencies": ["postgresql"]
+  },
+  "conformance": {
+    "owner_team": "DiddiGo",
+    "openapi_path": "docs/api/openapi.yaml",
+    "asyncapi_path": "docs/api/asyncapi.yaml",
+    "contract_test_paths": ["tests/test_comms_task_router.py", "tests/test_support_context_router.py"],
+    "staging_smoke_test": "required"
+  }
+}
