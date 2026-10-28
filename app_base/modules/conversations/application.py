@@ -567,17 +567,14 @@ class SupportCaseService:
             if not decision.allowed:
                 raise PermissionError(decision.reason_code)
 
-        if task is None:
-            raise ValueError("SUPPORT_RESOURCE_REFERENCE_REQUIRED")
-
         if not idempotency_key:
             raise ValueError("IDEMPOTENCY_KEY_REQUIRED")
 
         support_client = self.support_client or diddisupport_read_client()
         remote_case = await support_client.create_case(
-            origin_service=task.owner_service,
-            resource_type=task.task_type,
-            resource_id=task.task_id,
+            origin_service=task.owner_service if task else None,
+            resource_type=task.task_type if task else None,
+            resource_id=task.task_id if task else None,
             origin_report_id=origin_report_id or idempotency_key,
             reporter_user_id=requester_user_id,
             category=category,

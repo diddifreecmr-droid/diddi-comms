@@ -25,22 +25,36 @@ Both calls use `Authorization: Bearer <service-token>`, `X-Client-ID`, and
 `X-Request-ID`. The token must target audience `diddi-support`, subject
 `service:diddicomms`, and scope `diddi-support:cases:read`.
 
-## Case creation implemented in DiddiComms
+## Conversation-first case creation implemented in DiddiComms
 
-The DiddiComms public route `POST /comms/v1/support/cases` now creates the
-Support case through:
+The public frontend entry point is:
+
+`POST /comms/v1/support/conversations`
+
+It accepts a category, initial message, optional subject and priority, and an
+optional atomic business context (`owner_service`, `task_type`, `task_id`). A
+contextual request is authorized against the owning module's task resolver
+before DiddiSupport is called. A request without context is a general Support
+request and does not call a business resolver.
+
+The legacy route `POST /comms/v1/support/cases` remains available for backward
+compatibility. Both routes create the authoritative Support case through:
 
 `POST /support/v1/internal/cases`
 
-It sends the required resource reference, reporter, category, subject,
-priority, request ID, service token, and idempotency key. The returned Support
-`case_id` is used to link the DiddiComms conversation projection.
+It sends the reporter, category, subject, priority, request ID, service token,
+and idempotency key. The business resource reference is included only for a
+contextual request. The returned Support `case_id` is used to link the
+DiddiComms conversation projection.
 
 The Support contract requires:
 
 - authorization for `service:diddicomms`;
 - idempotency by `Idempotency-Key`;
 - a returned `case_id`.
+
+General Support case creation additionally requires DiddiSupport to accept a
+case without `origin_service`, `resource_type`, and `resource_id`.
 
 DiddiComms stores the returned case reference to link its conversation. The
 Support service remains the source of truth for the case lifecycle.

@@ -71,6 +71,7 @@ def support_user_client(monkeypatch):
 def test_user_can_open_support_case_for_task(support_user_client) -> None:
     response = support_user_client.post(
         "/comms/v1/support/cases",
+        headers={"Idempotency-Key": "legacy-support-case-1"},
         json={
             "subject": "Ride problem",
             "initial_message": "The driver is not moving",
@@ -85,6 +86,125 @@ def test_user_can_open_support_case_for_task(support_user_client) -> None:
     assert response.json()["id"] == str(CASE_ID)
     assert response.json()["conversation_id"] == str(CONVERSATION_ID)
     assert response.json()["status"] == "open"
+
+
+def test_user_can_open_support_conversation_for_task(support_user_client, monkeypatch) -> None:
+    async def fake_open_case(self, **kwargs):
+        assert kwargs["requester_user_id"] == REQUESTER_ID
+        assert kwargs["subject"] == "Payment issue"
+        assert kwargs["category"] == "payment_issue"
+        assert kwargs["initial_message"] == "The payment is still pending"
+        assert kwargs["idempotency_key"] == "support-conversation-1"
+        assert kwargs["task"].owner_service == "diddigo"
+        assert kwargs["task"].task_type == "ride"
+        assert kwargs["task"].task_id == TASK_ID
+        return SimpleNamespace(
+            case=_case(),
+            conversation=SimpleNamespace(id=CONVERSATION_ID, state="active"),
+        )
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.SupportCaseService.open_case",
+        fake_open_case,
+    )
+    response = support_user_client.post(
+        "/comms/v1/support/conversations",
+        headers={"Idempotency-Key": "support-conversation-1"},
+        json={
+            "category": "payment_issue",
+            "message": "The payment is still pending",
+            "context": {
+                "owner_service": "diddigo",
+                "task_type": "ride",
+                "task_id": str(TASK_ID),
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "conversation_id": str(CONVERSATION_ID),
+        "support_case_id": str(CASE_ID),
+        "conversation_state": "active",
+        "case_status": "open",
+        "owner_service": "diddigo",
+        "task_type": "ride",
+        "task_id": str(TASK_ID),
+    }
+
+
+def test_user_can_open_general_support_conversation(support_user_client, monkeypatch) -> None:
+    async def fake_open_case(self, **kwargs):
+        assert kwargs["task"] is None
+        assert kwargs["subject"] == "Account issue"
+        return SimpleNamespace(
+            case=_case(owner_service=None, task_type=None, task_id=None),
+            conversation=SimpleNamespace(id=CONVERSATION_ID, state="active"),
+        )
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.SupportCaseService.open_case",
+        fake_open_case,
+    )
+    response = support_user_client.post(
+        "/comms/v1/support/conversations",
+        headers={"Idempotency-Key": "general-support-1"},
+        json={"category": "account_issue", "message": "I cannot update my account"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["owner_service"] is None
+    assert response.json()["task_id"] is None
+
+
+def test_support_conversation_context_is_atomic(support_user_client) -> None:
+    response = support_user_client.post(
+        "/comms/v1/support/conversations",
+        headers={"Idempotency-Key": "invalid-context-1"},
+        json={
+            "category": "ride_issue",
+            "message": "Help",
+            "context": {"owner_service": "diddigo", "task_type": "ride"},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_support_conversation_requires_idempotency_key(support_user_client) -> None:
+    response = support_user_client.post(
+        "/comms/v1/support/conversations",
+        json={"category": "account_issue", "message": "Help with my account"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
+
+
+def test_support_conversation_hides_foreign_task(support_user_client, monkeypatch) -> None:
+    async def fake_open_case(self, **kwargs):
+        raise PermissionError("ACTOR_NOT_TASK_PARTICIPANT")
+
+    monkeypatch.setattr(
+        "app_base.modules.conversations.presentation.router.SupportCaseService.open_case",
+        fake_open_case,
+    )
+    response = support_user_client.post(
+        "/comms/v1/support/conversations",
+        headers={"Idempotency-Key": "foreign-task-1"},
+        json={
+            "category": "ride_issue",
+            "message": "This ride is not mine",
+            "context": {
+                "owner_service": "diddigo",
+                "task_type": "ride",
+                "task_id": str(TASK_ID),
+            },
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TASK_NOT_FOUND"
 
 
 @pytest.fixture
@@ -199,15 +319,22 @@ def test_legacy_agent_message_redirects_to_diddisupport(support_service_client) 
     assert response.json()["error"]["code"] == "DIDDISUPPORT_BACKOFFICE_REQUIRED"
 
 
-def _case(*, status: str = "open", assigned_to_user_id=None):
+def _case(
+    *,
+    status: str = "open",
+    assigned_to_user_id=None,
+    owner_service="diddigo",
+    task_type="ride",
+    task_id=TASK_ID,
+):
     now = datetime(2026, 10, 11, tzinfo=UTC)
     return SimpleNamespace(
         id=CASE_ID,
         conversation_id=CONVERSATION_ID,
         requester_user_id=REQUESTER_ID,
-        owner_service="diddigo",
-        task_type="ride",
-        task_id=TASK_ID,
+        owner_service=owner_service,
+        task_type=task_type,
+        task_id=task_id,
         subject="Ride problem",
         status=status,
         priority="high",

@@ -219,6 +219,16 @@
       },
       {
         "method": "POST",
+        "path": "/comms/v1/support/conversations",
+        "operation": "open_support_conversation",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "required",
+        "status": "implemented",
+        "notes": "Single DiddiFree frontend entry point for contextual and general Support conversations."
+      },
+      {
+        "method": "POST",
         "path": "/comms/v1/support/cases",
         "operation": "open_support_case_compatibility",
         "auth": "user_jwt",

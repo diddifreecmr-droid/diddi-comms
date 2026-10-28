@@ -44,16 +44,18 @@ class FakeResolver:
 class FakeSupportClient:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.create_kwargs = None
 
     async def create_case(self, **kwargs):
         self.calls.append("create_case")
+        self.create_kwargs = kwargs
         return SimpleNamespace(case_id=CASE_ID, status="open", created_at=datetime.now(UTC))
 
     async def send_user_message(self, **kwargs):
         self.calls.append("send_user_message")
         assert kwargs["case_id"] == CASE_ID
         assert kwargs["reporter_user_id"] == REQUESTER_ID
-        assert kwargs["idempotency_key"] == "case-1:initial-message"
+        assert kwargs["idempotency_key"] == f"{self.create_kwargs['idempotency_key']}:initial-message"
         return SimpleNamespace(message_id=MESSAGE_ID)
 
 
@@ -82,3 +84,34 @@ async def test_open_case_confirms_remote_case_and_initial_message_before_project
     projected_message = next(item for item in session.added if isinstance(item, MessageModel))
     assert projected_message.id == MESSAGE_ID
     assert any(isinstance(item, SupportCaseModel) for item in session.added)
+
+
+@pytest.mark.asyncio
+async def test_open_general_case_does_not_call_a_business_resolver() -> None:
+    session = FakeSession()
+    support = FakeSupportClient()
+
+    def resolver_factory(owner):
+        raise AssertionError(f"unexpected resolver call for {owner}")
+
+    service = SupportCaseService(
+        session,  # type: ignore[arg-type]
+        resolver_factory=resolver_factory,
+        support_client=support,  # type: ignore[arg-type]
+    )
+
+    result = await service.open_case(
+        requester_user_id=REQUESTER_ID,
+        subject="Account issue",
+        initial_message="Please help with my account",
+        category="account_issue",
+        task=None,
+        idempotency_key="general-case-1",
+    )
+
+    assert result.case.owner_service is None
+    assert result.case.task_type is None
+    assert result.case.task_id is None
+    assert support.create_kwargs["origin_service"] is None
+    assert support.create_kwargs["resource_type"] is None
+    assert support.create_kwargs["resource_id"] is None

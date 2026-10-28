@@ -149,6 +149,42 @@ async def test_creates_case_with_contract_payload_and_idempotency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_creates_general_case_without_business_reference() -> None:
+    seen: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen
+        seen = request
+        return httpx.Response(
+            201,
+            json={"case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa", "status": "open"},
+        )
+
+    client, _ = make_client(handler)
+    await client.create_case(
+        origin_service=None,
+        resource_type=None,
+        resource_id=None,
+        origin_report_id="general-report-1",
+        reporter_user_id=UUID("22222222-2222-2222-2222-222222222222"),
+        category="account_issue",
+        subject="Account issue",
+        priority="normal",
+        idempotency_key="general-case-1",
+    )
+
+    assert seen is not None
+    payload = json.loads(seen.content)
+    assert payload == {
+        "origin_report_id": "general-report-1",
+        "reporter_user_id": "22222222-2222-2222-2222-222222222222",
+        "category": "account_issue",
+        "subject": "Account issue",
+        "priority": "normal",
+    }
+
+
+@pytest.mark.asyncio
 async def test_sends_user_message_with_visibility_and_idempotency() -> None:
     seen: httpx.Request | None = None
 

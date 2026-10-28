@@ -16,3 +16,8 @@ proposed, partial, blocked, and implemented behavior.
 | DiddiPay | Payment Support context provider | Proposed for DiddiComms |
 
 Open decisions are maintained in `docs/diddiconnect/open-questions.md`.
+
+## Team Briefs
+
+- Frontend DiddiFree: `docs/frontend/DIDDICOMMS_FRONTEND_SUPPORT_BRIEF_2026-10-28.md`
+- DiddiSupport: `docs/integrations/diddisupport-conversation-brief-2026-10-28.md`

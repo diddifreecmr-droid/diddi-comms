@@ -104,9 +104,9 @@ class DiddiSupportReadClient:
     async def create_case(
         self,
         *,
-        origin_service: str,
-        resource_type: str,
-        resource_id: UUID,
+        origin_service: str | None,
+        resource_type: str | None,
+        resource_id: UUID | None,
         reporter_user_id: UUID,
         category: str,
         subject: str,
@@ -118,16 +118,21 @@ class DiddiSupportReadClient:
         token = await self.config.service_token_client.access_token(self.config.create_scope)
         headers = self._headers(token, request_id=request_id)
         headers["Idempotency-Key"] = idempotency_key
-        payload = {
-            "origin_service": origin_service,
-            "resource_type": resource_type,
-            "resource_id": str(resource_id),
+        payload: dict[str, Any] = {
             "origin_report_id": origin_report_id,
             "reporter_user_id": str(reporter_user_id),
             "category": category,
             "subject": subject,
             "priority": priority,
         }
+        if origin_service is not None and resource_type is not None and resource_id is not None:
+            payload.update(
+                {
+                    "origin_service": origin_service,
+                    "resource_type": resource_type,
+                    "resource_id": str(resource_id),
+                }
+            )
         try:
             async with httpx.AsyncClient(
                 base_url=self.config.base_url.rstrip("/"),

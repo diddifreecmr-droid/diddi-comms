@@ -89,6 +89,16 @@ the source stream. SQL state and the inbox record commit before acknowledgement.
 6. Retire local case ownership only after parity, migration, and rollback
    verification.
 
+## Public DiddiComms Entry Point
+
+The DiddiFree frontend opens both contextual and general Support conversations
+through `POST /comms/v1/support/conversations`. It never calls DiddiSupport or
+an `/internal/` business route directly. Contextual requests are checked with
+the owning module's DiddiComms task resolver before case creation. General
+requests omit the context and therefore do not invoke a business module.
+
+`POST /comms/v1/support/cases` remains a compatibility route during migration.
+
 ## Errors And Dependency Failure
 
 Support `401` and `403` responses map to `502 DIDDISUPPORT_AUTH_REJECTED`

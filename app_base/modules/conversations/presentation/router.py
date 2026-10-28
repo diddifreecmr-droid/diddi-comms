@@ -183,6 +183,37 @@ class OpenSupportCaseRequest(BaseModel):
     task_id: UUID | None = None
 
 
+class SupportConversationContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner_service: str = Field(min_length=1, max_length=80)
+    task_type: str = Field(min_length=1, max_length=80)
+    task_id: UUID
+
+
+class OpenSupportConversationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str = Field(default="general", min_length=1, max_length=80)
+    message: str = Field(min_length=1, max_length=2000)
+    subject: str | None = Field(default=None, min_length=1, max_length=200)
+    priority: str = Field(default="normal", max_length=20)
+    origin_report_id: str | None = Field(default=None, max_length=120)
+    context: SupportConversationContext | None = None
+
+
+class SupportConversationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    support_case_id: UUID
+    conversation_state: str
+    case_status: str
+    owner_service: str | None
+    task_type: str | None
+    task_id: UUID | None
+
+
 class SupportCaseResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -695,39 +726,65 @@ async def open_support_case(
         if payload.owner_service and payload.task_type and payload.task_id
         else None
     )
-    client_ip = request.client.host if request.client else "unknown"
-    for dimension, subject_value in (
-        ("user", str(current_user.user_id)),
-        ("task", str(payload.task_id) if payload.task_id else "none"),
-        ("ip", client_ip),
-    ):
-        await enforce_rate_limit(
-            request,
-            bucket=f"support-case:{dimension}",
-            subject=subject_value,
-            limit=settings.support_case_rate_limit_per_hour,
-            window_seconds=3600,
-        )
-    try:
-        result = await SupportCaseService(session).open_case(
-            requester_user_id=current_user.user_id,
-            subject=payload.subject,
-            priority=payload.priority,
-            category=payload.category,
-            origin_report_id=payload.origin_report_id,
-            initial_message=payload.initial_message,
-            task=task,
-            request_id=getattr(request.state, "request_id", None),
-            idempotency_key=idempotency_key,
-        )
-    except PermissionError as exc:
-        raise ApiError(403, str(exc), "User is not allowed to open support for this task.") from exc
-    except ValueError as exc:
-        code = str(exc)
-        if code == "IDEMPOTENCY_KEY_REQUIRED":
-            raise ApiError(400, code, "Idempotency-Key is required.") from exc
-        raise ApiError(422, code, "Support case payload is invalid.") from exc
+    result = await _open_support_for_user(
+        request=request,
+        session=session,
+        requester_user_id=current_user.user_id,
+        subject=payload.subject,
+        initial_message=payload.initial_message,
+        priority=payload.priority,
+        category=payload.category,
+        origin_report_id=payload.origin_report_id,
+        task=task,
+        idempotency_key=idempotency_key,
+    )
     return _support_case_response(result.case)
+
+
+@router.post(
+    "/support/conversations",
+    response_model=SupportConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def open_support_conversation(
+    payload: OpenSupportConversationRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SupportConversationResponse:
+    task = (
+        TaskReference(
+            owner_service=payload.context.owner_service,
+            task_type=payload.context.task_type,
+            task_id=payload.context.task_id,
+        )
+        if payload.context
+        else None
+    )
+    subject = payload.subject or payload.category.replace("_", " ").strip().capitalize()
+    result = await _open_support_for_user(
+        request=request,
+        session=session,
+        requester_user_id=current_user.user_id,
+        subject=subject,
+        initial_message=payload.message,
+        priority=payload.priority,
+        category=payload.category,
+        origin_report_id=payload.origin_report_id,
+        task=task,
+        idempotency_key=idempotency_key,
+    )
+    case = result.case
+    return SupportConversationResponse(
+        conversation_id=result.conversation.id,
+        support_case_id=case.id,
+        conversation_state=result.conversation.state,
+        case_status=case.status,
+        owner_service=case.owner_service,
+        task_type=case.task_type,
+        task_id=case.task_id,
+    )
 
 
 @router.get("/support/cases", response_model=list[SupportCaseResponse])
@@ -873,6 +930,58 @@ def _remote_support_message_response(
         delivery_status="delivered",
         created=None,
     )
+
+
+async def _open_support_for_user(
+    *,
+    request: Request,
+    session: AsyncSession,
+    requester_user_id: UUID,
+    subject: str,
+    initial_message: str | None,
+    priority: str,
+    category: str,
+    origin_report_id: str | None,
+    task: TaskReference | None,
+    idempotency_key: str | None,
+):
+    if not idempotency_key:
+        raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
+    client_ip = request.client.host if request.client else "unknown"
+    for dimension, subject_value in (
+        ("user", str(requester_user_id)),
+        ("task", str(task.task_id) if task else "general"),
+        ("ip", client_ip),
+    ):
+        await enforce_rate_limit(
+            request,
+            bucket=f"support-case:{dimension}",
+            subject=subject_value,
+            limit=settings.support_case_rate_limit_per_hour,
+            window_seconds=3600,
+        )
+    try:
+        return await SupportCaseService(session).open_case(
+            requester_user_id=requester_user_id,
+            subject=subject,
+            priority=priority,
+            category=category,
+            origin_report_id=origin_report_id,
+            initial_message=initial_message,
+            task=task,
+            request_id=getattr(request.state, "request_id", None),
+            idempotency_key=idempotency_key,
+        )
+    except PermissionError as exc:
+        code = str(exc)
+        if code == "ACTOR_NOT_TASK_PARTICIPANT":
+            raise ApiError(404, "TASK_NOT_FOUND", "Task was not found.") from exc
+        raise ApiError(403, code, "User is not allowed to open support for this task.") from exc
+    except ValueError as exc:
+        code = str(exc)
+        if code == "IDEMPOTENCY_KEY_REQUIRED":
+            raise ApiError(400, code, "Idempotency-Key is required.") from exc
+        raise ApiError(422, code, "Support case payload is invalid.") from exc
 
 
 async def _ensure_user_can_read_conversation(session: AsyncSession, *, conversation_id: UUID, user_id: UUID) -> None:
