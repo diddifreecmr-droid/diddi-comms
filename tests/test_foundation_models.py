@@ -33,7 +33,7 @@ def test_messages_have_sequence_and_client_idempotency_constraints() -> None:
 def test_support_cases_link_to_support_conversation_and_optional_task() -> None:
     table = Base.metadata.tables["support_cases"]
 
-    assert {"conversation_id", "requester_user_id", "owner_service", "task_type", "task_id"}.issubset(
+    assert {"conversation_id", "requester_user_id", "category", "owner_service", "task_type", "task_id"}.issubset(
         table.columns.keys()
     )
     assert table.columns["conversation_id"].unique

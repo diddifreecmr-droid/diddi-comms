@@ -63,4 +63,5 @@ python_functions = ["test_*"]
 markers = [
     "unit: fast tests that do not require Postgres, Redis, or Docker",
     "integration: tests that require live dependencies",
+    "staging: tests that call deployed staging services over their public interfaces",
 ]

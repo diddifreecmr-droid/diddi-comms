@@ -55,14 +55,14 @@ connection_registry = ConnectionRegistry()
 
 @router.websocket("/ws")
 async def websocket_events(websocket: WebSocket) -> None:
-    await websocket.accept()
     try:
-        user = _authenticate(websocket)
+        user, selected_subprotocol = _authenticate(websocket)
         conversation_id = UUID(websocket.query_params["conversation_id"])
         await _ensure_participant(conversation_id=conversation_id, user=user)
     except (ApiError, KeyError, ValueError) as exc:
         await websocket.close(code=4401 if isinstance(exc, ApiError) and exc.status_code == 401 else 4403)
         return
+    await websocket.accept(subprotocol=selected_subprotocol)
 
     if not await connection_registry.acquire(user_id=user.user_id, conversation_id=conversation_id):
         increment("diddicomms_websocket_connections_total", {"outcome": "limited"})
@@ -136,14 +136,37 @@ async def websocket_events(websocket: WebSocket) -> None:
         await redis.aclose()
 
 
-def _authenticate(websocket: WebSocket) -> AuthenticatedUser:
-    authorization = websocket.headers.get("authorization")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise ApiError(401, "TOKEN_MISSING", "Authentication is required.")
-    claims = FreeIDTokenVerifier(require_audience=False).verify(authorization.removeprefix("Bearer ").strip())
+def _authenticate(websocket: WebSocket) -> tuple[AuthenticatedUser, str | None]:
+    token, selected_subprotocol = _authentication_token(websocket)
+    claims = FreeIDTokenVerifier(require_audience=False).verify(token)
     if claims.token_type == "service" or claims.subject.startswith("service:"):
         raise ApiError(403, "USER_TOKEN_REQUIRED", "A user token is required.")
-    return AuthenticatedUser(user_id=UUID(claims.subject), role=claims.role, claims=claims.claims)
+    return (
+        AuthenticatedUser(user_id=UUID(claims.subject), role=claims.role, claims=claims.claims),
+        selected_subprotocol,
+    )
+
+
+def _authentication_token(websocket: WebSocket) -> tuple[str, str | None]:
+    authorization = websocket.headers.get("authorization")
+    protocols = [
+        protocol.strip()
+        for protocol in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if protocol.strip()
+    ]
+    selected_subprotocol = "diddicomms.v1" if "diddicomms.v1" in protocols else None
+    if authorization and authorization.startswith("Bearer "):
+        return authorization.removeprefix("Bearer ").strip(), selected_subprotocol
+
+    auth_protocol = next(
+        (protocol for protocol in protocols if protocol.startswith("diddicomms.auth.")),
+        None,
+    )
+    if auth_protocol and selected_subprotocol:
+        token = auth_protocol.removeprefix("diddicomms.auth.").strip()
+        if token:
+            return token, selected_subprotocol
+    raise ApiError(401, "TOKEN_MISSING", "Authentication is required.")
 
 
 async def _ensure_participant(*, conversation_id: UUID, user: AuthenticatedUser) -> None:

@@ -1,0 +1,17 @@
+{
+  "event_id": "cccccccc-3333-3333-3333-cccccccccccc",
+  "event_type": "support.case.message.created.v1",
+  "event_version": 1,
+  "occurred_at": "2026-10-21T00:00:00Z",
+  "producer": "diddi-support",
+  "aggregate_type": "support_case",
+  "aggregate_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+  "aggregate_version": 3,
+  "correlation_id": "eeeeeeee-5555-5555-5555-eeeeeeeeeeee",
+  "causation_id": "",
+  "payload": {
+    "case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+    "message_id": "dddddddd-4444-4444-4444-dddddddddddd",
+    "visibility": "user_visible"
+  }
+}

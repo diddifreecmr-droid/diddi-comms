@@ -149,6 +149,7 @@ class SupportCaseModel(Base):
     __table_args__ = (
         Index("ix_support_cases_status_priority", "status", "priority"),
         Index("ix_support_cases_requester", "requester_user_id"),
+        Index("ix_support_cases_requester_updated", "requester_user_id", "updated_at", "id"),
         Index("ix_support_cases_assignee", "assigned_to_user_id"),
         Index("ix_support_cases_task_reference", "owner_service", "task_type", "task_id"),
     )
@@ -169,6 +170,7 @@ class SupportCaseModel(Base):
     task_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     task_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     subject: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False, server_default="general")
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="open")
     priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="normal")
     assigned_to_user_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)

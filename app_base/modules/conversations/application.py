@@ -399,6 +399,9 @@ class SendMessageService:
                 body=body,
                 message_id=remote_message.message_id,
             )
+            activity_at = datetime.now(UTC)
+            case.updated_at = activity_at
+            conversation.updated_at = activity_at
             participants = await self.conversations.participants_for(conversation.id)
             self.deliveries.add_recipients(message=message, participants=participants)
             self.audit.add(
@@ -517,7 +520,7 @@ class SupportCaseResult:
 
 
 class SupportCaseService:
-    valid_priorities = {"low", "normal", "high", "urgent"}
+    valid_priorities = {"low", "normal", "high", "critical"}
     open_statuses = {"open", "assigned", "pending_user"}
 
     def __init__(
@@ -623,6 +626,7 @@ class SupportCaseService:
             conversation_id=conversation_id,
             requester_user_id=requester_user_id,
             subject=subject,
+            category=category,
             priority=priority,
             owner_service=task.owner_service if task else None,
             task_type=task.task_type if task else None,
@@ -648,6 +652,7 @@ class SupportCaseService:
                 safe_metadata={
                     "owner_service": task.owner_service if task else None,
                     "task_type": task.task_type if task else None,
+                    "category": category,
                     "priority": priority,
                 },
             )
@@ -665,6 +670,7 @@ class SupportCaseService:
                     "requester_user_id": str(requester_user_id),
                     "owner_service": task.owner_service if task else None,
                     "task_type": task.task_type if task else None,
+                    "category": category,
                     "priority": priority,
                 },
             )

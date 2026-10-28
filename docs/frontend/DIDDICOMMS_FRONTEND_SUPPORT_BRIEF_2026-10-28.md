@@ -96,12 +96,12 @@ DiddiSupport.
 | `category` | Non | `general` par defaut, 1 a 80 caracteres |
 | `message` | Oui | 1 a 2 000 caracteres |
 | `subject` | Non | 1 a 200 caracteres ; derive de la categorie si absent |
-| `priority` | Non | `low`, `normal`, `high` ou `urgent` |
+| `priority` | Non | `low`, `normal`, `high` ou `critical` |
 | `origin_report_id` | Non | Reference fonctionnelle existante, 120 caracteres maximum |
 | `context` | Non | Objet complet ou `null` ; jamais partiel |
 
 Le frontend ne doit pas permettre a l'utilisateur de choisir librement la
-priorite `urgent`. Cette valeur est reservee aux parcours explicitement
+priorite `critical`. Cette valeur est reservee aux parcours explicitement
 approuves. Le SOS DiddiGo reste une action DiddiGo distincte.
 
 ## Reponse
@@ -123,6 +123,10 @@ Il n'utilise pas `support_case_id` pour appeler DiddiSupport.
 
 ## Messages
 
+Le contrat frontend complet, incluant la liste des demandes, les categories et
+le WebSocket, est publie dans
+`docs/frontend/DIDDICOMMS_FRONTEND_CONVERSATIONS_API.md`.
+
 Envoyer un message :
 
 ```http
@@ -143,6 +147,33 @@ Relire l'historique :
 ```http
 GET /comms/v1/conversations/{conversation_id}/messages?after_seq=0&limit=100
 ```
+
+Chaque message contient `created_at`, `sender_type` et `sender_role`.
+L'interface utilise `sender_type`, et non une comparaison libre d'identifiants,
+pour distinguer utilisateur, agent Support et message systeme.
+
+## Mes demandes et categories
+
+```http
+GET /comms/v1/support/conversations?status=open&limit=20&cursor=<opaque>
+GET /comms/v1/support/categories?owner_service=diddigo&task_type=ride
+Authorization: Bearer <JWT utilisateur>
+```
+
+Le frontend conserve et renvoie `next_cursor` sans le decoder. Les identifiants
+de categorie viennent du catalogue DiddiComms ; les libelles visibles sont
+traduits a partir de `label_key`.
+
+## Temps reel
+
+```text
+wss://messaging.diddifree.com/comms/v1/ws?conversation_id=<uuid>&after_event_id=<event_id>
+```
+
+Les clients natifs utilisent `Authorization: Bearer <JWT>`. Les clients Web
+negocient `diddicomms.v1` et `diddicomms.auth.<JWT>`. Les evenements,
+reconnexions, heartbeats et codes de fermeture sont detailles dans le contrat
+frontend complet.
 
 Pour une conversation Support, DiddiComms retourne uniquement les messages
 `user_visible` fournis par DiddiSupport. Une note interne ne doit jamais etre

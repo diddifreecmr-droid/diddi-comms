@@ -99,6 +99,11 @@
           "path": {"type": "string", "pattern": "^/"},
           "auth": {"const": "user_jwt"},
           "status": {"$ref": "#/$defs/integrationStatus"},
+          "authentication_modes": {
+            "type": "array",
+            "items": {"enum": ["authorization_header", "websocket_subprotocol"]},
+            "uniqueItems": true
+          },
           "resync_route": {"type": "string", "pattern": "^/"},
           "events": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
         }

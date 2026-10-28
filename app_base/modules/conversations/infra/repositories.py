@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_base.modules.context.domain import CommunicationContext, TaskReference
@@ -311,6 +311,30 @@ class SupportCaseRepository:
         result = await self.session.execute(statement)
         return list(result.scalars().all())
 
+    async def list_for_requester(
+        self,
+        *,
+        requester_user_id: UUID,
+        status: str | None = None,
+        before_updated_at: datetime | None = None,
+        before_id: UUID | None = None,
+        limit: int = 20,
+    ) -> list[SupportCaseModel]:
+        statement = select(SupportCaseModel).where(SupportCaseModel.requester_user_id == requester_user_id)
+        if status:
+            statement = statement.where(SupportCaseModel.status == status)
+        if before_updated_at is not None and before_id is not None:
+            statement = statement.where(
+                or_(
+                    SupportCaseModel.updated_at < before_updated_at,
+                    and_(SupportCaseModel.updated_at == before_updated_at, SupportCaseModel.id < before_id),
+                )
+            )
+        result = await self.session.execute(
+            statement.order_by(SupportCaseModel.updated_at.desc(), SupportCaseModel.id.desc()).limit(limit)
+        )
+        return list(result.scalars().all())
+
     def add_case(
         self,
         *,
@@ -318,6 +342,7 @@ class SupportCaseRepository:
         conversation_id: UUID,
         requester_user_id: UUID,
         subject: str,
+        category: str,
         priority: str,
         owner_service: str | None = None,
         task_type: str | None = None,
@@ -333,6 +358,7 @@ class SupportCaseRepository:
             task_type=task_type,
             task_id=task_id,
             subject=subject,
+            category=category,
             status="open",
             priority=priority,
         )

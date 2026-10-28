@@ -95,6 +95,7 @@ class SupportEventHandler:
         if "message.created" in event.event_type:
             if event.payload.get("visibility", "user_visible") != "user_visible":
                 return
+            case.updated_at = now
             message_id = event.payload.get("message_id") or event.payload.get("id")
             if not message_id:
                 raise ValueError("SUPPORT_MESSAGE_ID_REQUIRED")

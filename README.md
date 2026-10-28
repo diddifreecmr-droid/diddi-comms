@@ -72,6 +72,10 @@ Add `--execute` to the replay command only after reviewing its dry-run output.
 See `docs/OPERATIONS_RUNBOOK.md` for deployment, recovery, backup/restore, and
 rollback procedures.
 
+Staging checks against the deployed DiddiComms and DiddiSupport APIs are
+documented in `docs/STAGING_DIDDICOMMS_DIDDISUPPORT_TESTS.md`. They are opt-in
+and never import code from another repository.
+
 For schema rollback, stop the API and worker first, run the Alembic downgrade,
 deploy matching application code, then restart both processes. Running a newer
 worker against a downgraded schema is intentionally unsupported.

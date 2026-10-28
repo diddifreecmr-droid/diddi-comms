@@ -228,6 +228,26 @@
         "notes": "Single DiddiFree frontend entry point for contextual and general Support conversations."
       },
       {
+        "method": "GET",
+        "path": "/comms/v1/support/conversations",
+        "operation": "list_my_support_conversations",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "not_applicable",
+        "status": "implemented",
+        "notes": "Requester-isolated list with opaque cursor pagination."
+      },
+      {
+        "method": "GET",
+        "path": "/comms/v1/support/categories",
+        "operation": "list_support_categories",
+        "auth": "user_jwt",
+        "required_scope": null,
+        "idempotency": "not_applicable",
+        "status": "implemented",
+        "notes": "Official global and business-context category catalog."
+      },
+      {
         "method": "POST",
         "path": "/comms/v1/support/cases",
         "operation": "open_support_case_compatibility",
@@ -351,7 +371,8 @@
     {
       "path": "/comms/v1/ws?conversation_id={conversation_id}&after_event_id={stream_id}",
       "auth": "user_jwt",
-      "status": "partial",
+      "status": "implemented",
+      "authentication_modes": ["authorization_header", "websocket_subprotocol"],
       "resync_route": "/comms/v1/conversations/{conversation_id}/messages?after_seq={sequence}",
       "events": [
         "comms.message.created.v1",

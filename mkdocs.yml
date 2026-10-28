@@ -51,6 +51,7 @@ nav:
   - Home: index.md
   - Frontend:
       - Support integration brief: frontend/DIDDICOMMS_FRONTEND_SUPPORT_BRIEF_2026-10-28.md
+      - Conversations API: frontend/DIDDICOMMS_FRONTEND_CONVERSATIONS_API.md
   - Integrations:
       - Overview: integrations/README.md
       - DiddiSupport: integrations/diddisupport.md
@@ -75,8 +76,10 @@ nav:
       - MVP sprint plan: SPRINT_PLAN_DIDDICOMMS_MVP.md
       - Remaining implementation: SPRINTS_DIDDICOMMS_REMAINING_IMPLEMENTATION.md
       - Contract alignment sprint: SPRINT_DIDDICONNECT_CONTRACT_ALIGNMENT.md
+      - Complete frontend conversations: SPRINT_FRONTEND_COMPLETE_CONVERSATIONS_2026-10-28.md
       - Phase 0 questions: PHASE_0_SPEC_QUESTIONS.md
   - Operations:
       - Runbook: OPERATIONS_RUNBOOK.md
+      - DiddiComms-DiddiSupport staging tests: STAGING_DIDDICOMMS_DIDDISUPPORT_TESTS.md
       - Portainer and module wiring: PORTAINER_ENV_AND_DIDDIGO.md
       - MkDocs Docker deployment: MKDOCS_DOCKER.md

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -14,6 +15,7 @@ TASK_ID = UUID("11111111-1111-1111-1111-111111111111")
 CONVERSATION_ID = UUID("99999999-9999-9999-9999-999999999999")
 PASSENGER_ID = UUID("22222222-2222-2222-2222-222222222222")
 MESSAGE_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+MESSAGE_CREATED_AT = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -116,6 +118,7 @@ def send_message_client(monkeypatch):
                 client_message_id="client-1",
                 body="Hello",
                 moderation_status="accepted",
+                created_at=MESSAGE_CREATED_AT,
             ),
         )
 
@@ -148,6 +151,9 @@ def test_send_message_route_returns_message(send_message_client) -> None:
         "body": "Hello",
         "moderation_status": "accepted",
         "delivery_status": "accepted",
+        "created_at": "2026-10-28T12:00:00Z",
+        "sender_type": "user",
+        "sender_role": None,
         "created": True,
     }
 

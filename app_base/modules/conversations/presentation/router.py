@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import json
+from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
@@ -41,6 +46,7 @@ from app_base.modules.conversations.infra.repositories import (
     SupportCaseRepository,
 )
 from app_base.modules.conversations.safety import ConversationSafetyService
+from app_base.modules.support.categories import SupportCategory, category_allows_context, category_catalog
 from app_base.modules.support.factory import diddisupport_read_client
 from app_base.modules.support.read_client import SupportMessageResponse as RemoteSupportMessage
 
@@ -144,6 +150,9 @@ class MessageResponse(BaseModel):
     body: str
     moderation_status: str
     delivery_status: str = "accepted"
+    created_at: datetime | None = None
+    sender_type: Literal["user", "support_agent", "system"] = "user"
+    sender_role: str | None = None
     created: bool | None = None
 
 
@@ -194,10 +203,10 @@ class SupportConversationContext(BaseModel):
 class OpenSupportConversationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    category: str = Field(default="general", min_length=1, max_length=80)
+    category: SupportCategory = SupportCategory.GENERAL
     message: str = Field(min_length=1, max_length=2000)
     subject: str | None = Field(default=None, min_length=1, max_length=200)
-    priority: str = Field(default="normal", max_length=20)
+    priority: Literal["low", "normal", "high", "critical"] = "normal"
     origin_report_id: str | None = Field(default=None, max_length=120)
     context: SupportConversationContext | None = None
 
@@ -214,6 +223,45 @@ class SupportConversationResponse(BaseModel):
     task_id: UUID | None
 
 
+class SupportConversationSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: UUID
+    support_case_id: UUID
+    category: str
+    subject: str
+    case_status: str
+    priority: str
+    conversation_state: str
+    owner_service: str | None
+    task_type: str | None
+    task_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SupportConversationPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SupportConversationSummary]
+    next_cursor: str | None
+
+
+class SupportCategoryContextResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner_service: str
+    task_type: str
+
+
+class SupportCategoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: SupportCategory
+    label_key: str
+    contexts: list[SupportCategoryContextResponse]
+
+
 class SupportCaseResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -224,6 +272,7 @@ class SupportCaseResponse(BaseModel):
     task_type: str | None
     task_id: UUID | None
     subject: str
+    category: str
     status: str
     priority: str
     assigned_to_user_id: UUID | None
@@ -367,14 +416,24 @@ async def list_messages(
             for index, message in enumerate(messages, start=1)
             if index > max(after_seq, 0)
         ][: min(max(limit, 1), 200)]
+    conversation_repository = ConversationRepository(session)
     messages = await MessageRepository(session).list_after(
         conversation_id=conversation_id,
         after_sequence=max(after_seq, 0),
         limit=min(max(limit, 1), 200),
     )
     statuses = await MessageDeliveryRepository(session).statuses_for_messages([message.id for message in messages])
+    roles = {
+        participant.user_id: participant.role
+        for participant in await conversation_repository.participants_for(conversation_id)
+    }
     return [
-        _message_response(message, delivery_status=statuses.get(message.id, "accepted")) for message in messages
+        _message_response(
+            message,
+            delivery_status=statuses.get(message.id, "accepted"),
+            sender_role=roles.get(message.sender_user_id),
+        )
+        for message in messages
     ]
 
 
@@ -557,9 +616,7 @@ async def list_backoffice_messages(
     except LookupError as exc:
         raise ApiError(404, str(exc), "Conversation was not found.") from exc
     statuses = await MessageDeliveryRepository(session).statuses_for_messages([message.id for message in messages])
-    return [
-        _message_response(message, delivery_status=statuses.get(message.id, "accepted")) for message in messages
-    ]
+    return [_message_response(message, delivery_status=statuses.get(message.id, "accepted")) for message in messages]
 
 
 @router.post(
@@ -753,6 +810,12 @@ async def open_support_conversation(
     current_user: AuthenticatedUser = Depends(require_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> SupportConversationResponse:
+    if not category_allows_context(
+        payload.category,
+        owner_service=payload.context.owner_service if payload.context else None,
+        task_type=payload.context.task_type if payload.context else None,
+    ):
+        raise ApiError(422, "SUPPORT_CATEGORY_CONTEXT_INVALID", "Support category is not valid for this context.")
     task = (
         TaskReference(
             owner_service=payload.context.owner_service,
@@ -762,7 +825,7 @@ async def open_support_conversation(
         if payload.context
         else None
     )
-    subject = payload.subject or payload.category.replace("_", " ").strip().capitalize()
+    subject = payload.subject or payload.category.value.replace("_", " ").strip().capitalize()
     result = await _open_support_for_user(
         request=request,
         session=session,
@@ -770,7 +833,7 @@ async def open_support_conversation(
         subject=subject,
         initial_message=payload.message,
         priority=payload.priority,
-        category=payload.category,
+        category=payload.category.value,
         origin_report_id=payload.origin_report_id,
         task=task,
         idempotency_key=idempotency_key,
@@ -785,6 +848,55 @@ async def open_support_conversation(
         task_type=case.task_type,
         task_id=case.task_id,
     )
+
+
+@router.get("/support/conversations", response_model=SupportConversationPage)
+async def list_my_support_conversations(
+    case_status: str | None = Query(default=None, alias="status", max_length=40),
+    cursor: str | None = Query(default=None, max_length=500),
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: AuthenticatedUser = Depends(require_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SupportConversationPage:
+    before_updated_at, before_id = _decode_support_cursor(cursor) if cursor else (None, None)
+    cases = await SupportCaseRepository(session).list_for_requester(
+        requester_user_id=current_user.user_id,
+        status=case_status,
+        before_updated_at=before_updated_at,
+        before_id=before_id,
+        limit=limit + 1,
+    )
+    has_more = len(cases) > limit
+    page_cases = cases[:limit]
+    return SupportConversationPage(
+        items=[_support_conversation_summary(case) for case in page_cases],
+        next_cursor=_encode_support_cursor(page_cases[-1]) if has_more and page_cases else None,
+    )
+
+
+@router.get("/support/categories", response_model=list[SupportCategoryResponse])
+async def list_support_categories(
+    owner_service: str | None = Query(default=None, max_length=80),
+    task_type: str | None = Query(default=None, max_length=80),
+    _current_user: AuthenticatedUser = Depends(require_current_user),
+) -> list[SupportCategoryResponse]:
+    if bool(owner_service) != bool(task_type):
+        raise ApiError(
+            422,
+            "SUPPORT_CATEGORY_CONTEXT_INCOMPLETE",
+            "owner_service and task_type must be provided together.",
+        )
+    return [
+        SupportCategoryResponse(
+            id=item["id"],
+            label_key=str(item["label_key"]),
+            contexts=[
+                SupportCategoryContextResponse(owner_service=context[0], task_type=context[1])
+                for context in item["contexts"]
+            ],
+        )
+        for item in category_catalog(owner_service=owner_service, task_type=task_type)
+    ]
 
 
 @router.get("/support/cases", response_model=list[SupportCaseResponse])
@@ -899,6 +1011,7 @@ def _message_response(
     *,
     created: bool | None = None,
     delivery_status: str = "accepted",
+    sender_role: str | None = None,
 ) -> MessageResponse:
     return MessageResponse(
         id=message.id,
@@ -909,6 +1022,9 @@ def _message_response(
         body=message.body,
         moderation_status=message.moderation_status,
         delivery_status=delivery_status,
+        created_at=getattr(message, "created_at", None),
+        sender_type=_sender_type(sender_role),
+        sender_role=sender_role,
         created=created,
     )
 
@@ -928,6 +1044,9 @@ def _remote_support_message_response(
         body=message.body,
         moderation_status="accepted",
         delivery_status="delivered",
+        created_at=message.created_at,
+        sender_type=_remote_sender_type(message.author_type),
+        sender_role=_remote_sender_role(message.author_type),
         created=None,
     )
 
@@ -1025,6 +1144,7 @@ def _support_case_response(case) -> SupportCaseResponse:
         task_type=case.task_type,
         task_id=case.task_id,
         subject=case.subject,
+        category=getattr(case, "category", SupportCategory.GENERAL.value),
         status=case.status,
         priority=case.priority,
         assigned_to_user_id=case.assigned_to_user_id,
@@ -1033,3 +1153,64 @@ def _support_case_response(case) -> SupportCaseResponse:
         updated_at=case.updated_at.isoformat().replace("+00:00", "Z") if case.updated_at else None,
         resolved_at=case.resolved_at.isoformat().replace("+00:00", "Z") if case.resolved_at else None,
     )
+
+
+def _support_conversation_summary(case) -> SupportConversationSummary:
+    return SupportConversationSummary(
+        conversation_id=case.conversation_id,
+        support_case_id=case.id,
+        category=getattr(case, "category", SupportCategory.GENERAL.value),
+        subject=case.subject,
+        case_status=case.status,
+        priority=case.priority,
+        conversation_state="closed" if case.status in {"resolved", "closed"} else "active",
+        owner_service=case.owner_service,
+        task_type=case.task_type,
+        task_id=case.task_id,
+        created_at=case.created_at,
+        updated_at=case.updated_at,
+    )
+
+
+def _sender_type(sender_role: str | None) -> Literal["user", "support_agent", "system"]:
+    if sender_role in {"support_agent", "agent", "backoffice"}:
+        return "support_agent"
+    if sender_role == "system":
+        return "system"
+    return "user"
+
+
+def _remote_sender_type(author_type: str) -> Literal["user", "support_agent", "system"]:
+    if author_type in {"agent", "support_agent"}:
+        return "support_agent"
+    if author_type == "system":
+        return "system"
+    return "user"
+
+
+def _remote_sender_role(author_type: str) -> str:
+    if author_type in {"agent", "support_agent"}:
+        return "support_agent"
+    if author_type == "system":
+        return "system"
+    return "requester"
+
+
+def _encode_support_cursor(case) -> str:
+    payload = json.dumps(
+        {"updated_at": case.updated_at.isoformat(), "id": str(case.id)},
+        separators=(",", ":"),
+    ).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+
+def _decode_support_cursor(cursor: str) -> tuple[datetime, UUID]:
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(cursor + padding))
+        updated_at = datetime.fromisoformat(str(payload["updated_at"]).replace("Z", "+00:00"))
+        if updated_at.tzinfo is None:
+            raise ValueError("cursor timestamp must include a timezone")
+        return updated_at, UUID(str(payload["id"]))
+    except (binascii.Error, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ApiError(422, "SUPPORT_CURSOR_INVALID", "Support conversation cursor is invalid.") from exc
