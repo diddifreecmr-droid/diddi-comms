@@ -62,6 +62,16 @@ services:
       redis:
         condition: service_healthy
 
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    ports:
+      - "${DIDDICOMMS_DOCS_PORT:-8041}:8000"
+    volumes:
+      - .:/site
+    restart: unless-stopped
+
 volumes:
   diddicomms-postgres:
   diddicomms-redis:

@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+site/
 .mypy_cache/
 dist/
 build/
@@ -11,4 +12,3 @@ build/
 htmlcov/
 .coverage
 coverage.xml
-

@@ -1,0 +1,82 @@
+site_name: DiddiComms
+site_description: Communication, support, integration, and operations documentation for DiddiComms.
+repo_url: https://github.com/diddifreecmr-droid/diddi-comms
+repo_name: diddifreecmr-droid/diddi-comms
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+    - search.highlight
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Use light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Frontend:
+      - Support integration brief: frontend/DIDDICOMMS_FRONTEND_SUPPORT_BRIEF_2026-10-28.md
+  - Integrations:
+      - Overview: integrations/README.md
+      - DiddiSupport: integrations/diddisupport.md
+      - DiddiSupport conversation brief: integrations/diddisupport-conversation-brief-2026-10-28.md
+      - DiddiGo: integrations/diddigo.md
+      - DiddiSend: integrations/diddisend.md
+      - DiddiFood: integrations/diddifood.md
+      - DiddiFreeID: integrations/diddifreeid.md
+      - DiddiAdmin: integrations/diddiadmin.md
+      - DiddiFiles: integrations/diddifiles.md
+      - DiddiPay: integrations/diddipay.md
+  - Contracts:
+      - DiddiConnect standard: diddiconnect/DIDDICONNECT_INTEGRATION_STANDARD_V1.md
+      - Context resolver: CONTEXT_RESOLVER_CONTRACT.md
+      - DiddiSupport gateway: DIDDISUPPORT_GATEWAY_CONTRACT.md
+      - Connector manifests: diddiconnect/manifests/README.md
+      - Open questions: diddiconnect/open-questions.md
+      - Changelog: diddiconnect/changelog.md
+  - Architecture:
+      - MVP architecture: DIDDICONNECT_MVP_ARCHITECTURE.md
+      - Personas and journeys: IMPLEMENTATION_PLAN_PERSONAS_JOURNEYS_SPECS.md
+      - MVP sprint plan: SPRINT_PLAN_DIDDICOMMS_MVP.md
+      - Remaining implementation: SPRINTS_DIDDICOMMS_REMAINING_IMPLEMENTATION.md
+      - Contract alignment sprint: SPRINT_DIDDICONNECT_CONTRACT_ALIGNMENT.md
+      - Phase 0 questions: PHASE_0_SPEC_QUESTIONS.md
+  - Operations:
+      - Runbook: OPERATIONS_RUNBOOK.md
+      - Portainer and module wiring: PORTAINER_ENV_AND_DIDDIGO.md
+      - MkDocs Docker deployment: MKDOCS_DOCKER.md

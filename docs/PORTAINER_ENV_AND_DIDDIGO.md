@@ -19,6 +19,7 @@ Configured environment keys:
 - `DIDDICOMMS_POSTGRES_USER`
 - `DIDDICOMMS_POSTGRES_PASSWORD`
 - `DIDDICOMMS_API_PORT=8040`
+- `DIDDICOMMS_DOCS_PORT=8041`
 - `IDENTITY_ISSUER=diddifree-id`
 - `IDENTITY_JWKS_URL=https://auth-staging.diddifree.com/identity/v1/.well-known/jwks.json`
 - `IDENTITY_SERVICE_TOKEN_URL=https://auth-staging.diddifree.com/identity/v1/auth/service/token`
@@ -28,6 +29,25 @@ Configured environment keys:
 
 Do not commit secret values. Keep the database password, metrics token, and
 owner resolver client secrets only in Portainer or a later secret manager.
+
+## Documentation Service
+
+The same stack contains an independent `docs` service built from
+`Dockerfile.docs`. It publishes MkDocs Material through the host port configured
+by `DIDDICOMMS_DOCS_PORT`:
+
+```text
+http://<SERVER_IP>:8041
+```
+
+The service does not require PostgreSQL, Redis, FreeID, or inter-container
+network access. The port is intentionally exposed on the server IP so frontend,
+Support, and module teams can consult the same versioned contracts. Restrict
+network access with the host firewall or the infrastructure access policy.
+
+Deployment and validation details are in `docs/MKDOCS_DOCKER.md`.
+The repository also provides `docker-compose.docs.yml` when operations prefer
+an independent Portainer stack named `diddicomms-docs`.
 
 ## DiddiGo Resolver Entry
 
@@ -91,6 +111,7 @@ After Portainer redeploy:
 curl https://messaging.diddifree.com/health
 curl https://messaging.diddifree.com/ready
 curl https://messaging.diddifree.com/comms/v1/ping
+curl http://<SERVER_IP>:8041/
 curl -H "Authorization: Bearer $METRICS_BEARER_TOKEN" \
   https://messaging.diddifree.com/internal/metrics
 ```

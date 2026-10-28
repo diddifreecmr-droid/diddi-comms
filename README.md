@@ -29,6 +29,22 @@ alembic upgrade head
 uvicorn app_base.main:app --reload --port 8040
 ```
 
+Run the documentation site in its dedicated container:
+
+```bash
+docker compose up -d --build docs
+```
+
+It can also run as its own stack:
+
+```bash
+docker compose -f docker-compose.docs.yml up -d --build
+```
+
+The site is available at `http://localhost:8041` by default. Set
+`DIDDICOMMS_DOCS_PORT` to publish it on another host port. See
+`docs/MKDOCS_DOCKER.md` for IP-based and Portainer deployment.
+
 Run the transactional outbox worker separately for Redis delivery:
 
 ```bash
@@ -79,3 +95,6 @@ Recommended stack settings:
 - Reference: `refs/heads/main`
 - Compose path: `docker-compose.portainer.yml`
 - Environment: `diddifree-prod`
+
+The stack also publishes the dedicated documentation service on
+`http://<SERVER_IP>:${DIDDICOMMS_DOCS_PORT:-8041}`.

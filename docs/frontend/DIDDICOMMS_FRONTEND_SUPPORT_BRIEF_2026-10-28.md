@@ -5,6 +5,20 @@
 **API publique :** DiddiComms  
 **Statut :** pret pour integration contextuelle ; support general dependant de DiddiSupport
 
+## Documentation partagee
+
+La documentation DiddiComms est publiee par un conteneur MkDocs dedie :
+
+```text
+http://<IP_DU_SERVEUR>:8041
+```
+
+Le port peut etre modifie par l'exploitation avec `DIDDICOMMS_DOCS_PORT`.
+L'equipe frontend doit demander l'IP et le port effectifs de l'environnement.
+Ce site sert uniquement a consulter les contrats et les guides : les appels de
+l'application vont toujours vers l'API DiddiComms, jamais vers le conteneur
+MkDocs.
+
 ## Objectif
 
 Tous les signalements, messages et futurs appels Support partent du frontend

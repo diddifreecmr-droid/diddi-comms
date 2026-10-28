@@ -1,0 +1,8 @@
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    ports:
+      - "${DIDDICOMMS_DOCS_PORT:-8041}:8000"
+    restart: unless-stopped

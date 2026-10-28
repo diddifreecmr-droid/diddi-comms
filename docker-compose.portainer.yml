@@ -117,6 +117,14 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    ports:
+      - "${DIDDICOMMS_DOCS_PORT:-8041}:8000"
+    restart: unless-stopped
+
 volumes:
   diddicomms-postgres:
   diddicomms-redis:
