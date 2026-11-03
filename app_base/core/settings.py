@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:16442/0"
     redis_key_prefix: str = "diddicomms"
     support_events_redis_url: str = ""
+    diddisend_events_redis_url: str = ""
 
     metrics_bearer_token: str = "local-dev-metrics-token"
 
@@ -58,6 +59,9 @@ class Settings(BaseSettings):
     support_events_stream: str = "diddisupport.events"
     support_events_consumer_group: str = "diddicomms"
     support_events_consumer_name: str = ""
+    diddisend_events_stream: str = "diddisend.events"
+    diddisend_events_consumer_group: str = "diddicomms-delivery"
+    diddisend_events_consumer_name: str = ""
     inbound_events_dlq_stream: str = "diddicomms.inbound.dlq"
     event_consumer_max_attempts: int = Field(default=5, ge=1, le=20)
     event_consumer_reclaim_idle_ms: int = Field(default=60_000, ge=1_000)

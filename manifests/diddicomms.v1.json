@@ -93,12 +93,12 @@
       "peer_module": "diddisend",
       "role": "business_context_provider",
       "direction": "outbound",
-      "status": "proposed",
+      "status": "partial",
       "contract": "docs/integrations/diddisend.md",
       "audience": "diddisend",
       "caller_subject": "service:diddicomms",
-      "scopes": ["diddisend:comms-task:read"],
-      "blocking_reason": "The delivery task-context resolver is not implemented."
+      "scopes": ["diddisend:comms:delivery-context:read"],
+      "blocking_reason": "Staging activation and end-to-end acceptance remain pending."
     },
     {
       "peer_module": "diddifood",
@@ -401,13 +401,19 @@
       {"name": "comms.call_attempt.client_result_recorded.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
       {"name": "comms.support.case_opened.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
       {"name": "comms.support.message.created.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
-      {"name": "comms.support.case_resolved.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"}
+      {"name": "comms.support.case_resolved.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
+      {"name": "comms.delivery.event.received.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"}
     ],
     "consumed": [
       "support.case.message.created.v1",
       "support.case.updated.v1",
       "support.case.assigned.v1",
-      "support.case.resolved.v1"
+      "support.case.resolved.v1",
+      "delivery.offer_created",
+      "delivery.status_changed",
+      "delivery.failed",
+      "delivery.retry_pending",
+      "delivery.payment_required"
     ]
   },
   "reliability": {

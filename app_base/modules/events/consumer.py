@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app_base.core.metrics import increment, shared_increment, shared_set_gauge
 from app_base.core.settings import settings
+from app_base.modules.audit.application import AuditEventDraft, AuditRecorder
 from app_base.modules.conversations.domain import ConversationState
 from app_base.modules.conversations.infra.repositories import ConversationRepository, SupportCaseRepository
 from app_base.modules.events.application import OutboxWriter
@@ -30,6 +31,7 @@ class InboundEvent:
     aggregate_id: str
     payload: dict[str, Any]
     aggregate_version: int = 0
+    source_service: str | None = None
 
     @classmethod
     def from_stream_fields(cls, fields: dict[str, str]) -> InboundEvent:
@@ -50,10 +52,11 @@ class InboundEvent:
             aggregate_version = int(envelope.get("aggregate_version") or payload.get("aggregate_version") or 0)
             return cls(
                 event_id=UUID(str(envelope["event_id"])),
-                event_type=str(envelope["event_type"]),
+                event_type=str(envelope.get("event_type") or envelope["name"]),
                 aggregate_id=str(envelope.get("aggregate_id", "")),
                 payload=payload,
                 aggregate_version=aggregate_version,
+                source_service=str(envelope["source_service"]) if envelope.get("source_service") else None,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("INBOUND_EVENT_INVALID") from exc
@@ -132,6 +135,63 @@ class SupportEventHandler:
                 conversation.state = ConversationState.CLOSED.value
                 conversation.closed_at = now
                 conversation.updated_at = now
+
+
+class DiddiSendDeliveryEventHandler:
+    """Translate DiddiSend events into safe local communication work.
+
+    DiddiComms never copies provider data, phone numbers, message bodies, or
+    attachments from the delivery event. A later channel worker can resolve
+    recipients through the protected delivery-context API.
+    """
+
+    supported_types = {
+        "delivery.offer_created",
+        "delivery.status_changed",
+        "delivery.failed",
+        "delivery.retry_pending",
+        "delivery.payment_required",
+    }
+
+    async def handle(self, session: AsyncSession, event: InboundEvent) -> None:
+        if event.source_service not in (None, "diddisend"):
+            raise ValueError("DIDDISEND_EVENT_SOURCE_INVALID")
+        if event.event_type not in self.supported_types:
+            return
+        if not event.aggregate_id:
+            raise ValueError("DIDDISEND_DELIVERY_ID_REQUIRED")
+
+        safe_payload: dict[str, Any] = {
+            "delivery_id": event.aggregate_id,
+            "source_event_id": str(event.event_id),
+            "source_event_type": event.event_type,
+        }
+        for key in ("status", "reason_code"):
+            value = event.payload.get(key)
+            if isinstance(value, (str, int, float, bool)):
+                safe_payload[key] = value
+
+        AuditRecorder(session).add(
+            AuditEventDraft(
+                actor_service="diddisend",
+                action="delivery.event.received",
+                target_type="delivery",
+                target_id=event.aggregate_id,
+                outcome="accepted",
+                idempotency_key=str(event.event_id),
+                safe_metadata={"event_type": event.event_type},
+            )
+        )
+        OutboxWriter(session).add(
+            OutboxEventDraft(
+                aggregate_type="delivery",
+                aggregate_id=event.aggregate_id,
+                event_type="comms.delivery.event.received.v1",
+                aggregate_version=event.aggregate_version,
+                causation_id=event.event_id,
+                payload=safe_payload,
+            )
+        )
 
 
 class RedisStreamConsumer:

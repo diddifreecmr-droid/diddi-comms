@@ -40,6 +40,7 @@ class ContextResolverClient:
         request_id = current_request_id()
         if request_id:
             headers["X-Request-ID"] = request_id
+            headers["X-Correlation-ID"] = request_id
 
         try:
             async with httpx.AsyncClient(
@@ -50,7 +51,12 @@ class ContextResolverClient:
                 response = await client.get(path, headers=headers)
                 response.raise_for_status()
                 payload = response.json()
-            context = CommunicationContext.model_validate(payload)
+            context = _parse_context_response(
+                payload,
+                owner_service=self.config.name,
+                task_type=task_type,
+                task_id=task_id,
+            )
             expected = TaskReference(owner_service=self.config.name, task_type=task_type, task_id=task_id)
             if context.task != expected:
                 raise ValueError("resolver response task reference does not match request")
@@ -81,3 +87,52 @@ class ContextResolverClient:
                 "CONTEXT_RESOLVER_INVALID_RESPONSE",
                 f"{self.config.name} returned an invalid context response.",
             ) from exc
+
+
+def _parse_context_response(
+    payload: object,
+    *,
+    owner_service: str,
+    task_type: ExternalName,
+    task_id: UUID,
+) -> CommunicationContext:
+    """Normalize the DiddiSend delivery-context contract to DiddiComms' domain."""
+    if not isinstance(payload, dict) or not str(payload.get("contract_version", "")).startswith(
+        "delivery-task-context."
+    ):
+        return CommunicationContext.model_validate(payload)
+
+    task = payload.get("task")
+    participants = payload.get("participants")
+    policy = payload.get("communication_policy")
+    if not isinstance(task, dict) or not isinstance(participants, list) or not isinstance(policy, dict):
+        raise ValueError("delivery context sections are invalid")
+
+    conversation_policy = policy.get("conversation")
+    external_call_policy = policy.get("external_call")
+    normalized_participants = []
+    for participant in participants:
+        if not isinstance(participant, dict):
+            raise ValueError("delivery context participant is invalid")
+        normalized_participants.append(
+            {
+                "user_id": participant["user_id"],
+                "role": participant["role"],
+            }
+        )
+
+    return CommunicationContext.model_validate(
+        {
+            "task": {
+                "owner_service": owner_service,
+                "task_type": task_type,
+                "task_id": task_id,
+            },
+            "state": task["status"],
+            "version": task.get("version", 0),
+            "participants": normalized_participants,
+            "messaging_allowed": conversation_policy == "active",
+            "calling_allowed": external_call_policy == "request_via_diddicomms",
+            "closes_at": payload.get("closes_at"),
+        }
+    )

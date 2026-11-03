@@ -1,6 +1,8 @@
 # DiddiSend Integration
 
-**Status:** `proposed` for task communication; Support context is implemented.
+**Status:** delivery context client and inbound event consumer implemented in
+DiddiComms; staging activation still requires the DiddiSend feature flag and
+service-token configuration.
 
 ## Ownership And Required Route
 
@@ -14,8 +16,16 @@ GET /internal/v1/comms/tasks/delivery/{delivery_id}
 The generic route form remains
 `/internal/v1/comms/tasks/{task_type}/{task_id}` with
 `task_type=delivery`. Authentication requires audience `diddisend`, subject
-`service:diddicomms`, client ID matching the token, and scope
-`diddisend:comms-task:read`.
+`service:diddicomms`, client ID matching the token, and the DiddiSend delivery
+context scope `diddisend:comms:delivery-context:read`.
+
+DiddiComms also consumes the Redis stream `diddisend.events` through the
+dedicated consumer group `diddicomms-delivery`. DiddiSend's flat `name` field
+is normalized to the DiddiComms event contract. Processing is at-least-once,
+deduplicated by `event_id`, retried, and dead-lettered after the configured
+attempt limit. The resulting local communication event contains only the
+delivery ID, source event identity, and safe status/reason fields; it never
+copies phone numbers, message bodies, or attachments.
 
 ## Required Projection
 

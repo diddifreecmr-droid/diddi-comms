@@ -12,10 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app_base.core.database import async_session_factory, engine
 from app_base.core.metrics import shared_increment, shared_set_gauge
-from app_base.core.redis import create_redis, create_support_events_redis
+from app_base.core.redis import create_diddisend_events_redis, create_redis, create_support_events_redis
 from app_base.core.settings import settings
 from app_base.core.tracing import configure_worker_tracing
-from app_base.modules.events.consumer import RedisStreamConsumer
+from app_base.modules.events.consumer import DiddiSendDeliveryEventHandler, RedisStreamConsumer
 from app_base.modules.events.infra.models import OutboxEventModel
 from app_base.modules.events.infra.redis_streams import RedisStreamPublisher, StreamEvent
 
@@ -124,15 +124,26 @@ async def run_worker() -> None:
     )
     local_redis = create_redis()
     support_events_redis = create_support_events_redis()
+    diddisend_events_redis = create_diddisend_events_redis()
     dispatcher = OutboxDispatcher(async_session_factory, local_redis)
     consumer = RedisStreamConsumer(
         async_session_factory,
         support_events_redis,
         metrics_redis=local_redis,
     )
+    diddisend_consumer = RedisStreamConsumer(
+        async_session_factory,
+        diddisend_events_redis,
+        metrics_redis=local_redis,
+        handler=DiddiSendDeliveryEventHandler(),
+        stream_name=settings.diddisend_events_stream,
+        group_name=settings.diddisend_events_consumer_group,
+        consumer_name=settings.diddisend_events_consumer_name or None,
+    )
     try:
         consecutive_failures = 0
         group_ready = False
+        diddisend_group_ready = False
         loops = 0
         last_metrics_refresh = 0.0
         while True:
@@ -140,15 +151,21 @@ async def run_worker() -> None:
                 if not group_ready:
                     await consumer.ensure_group()
                     group_ready = True
+                if not diddisend_group_ready:
+                    await diddisend_consumer.ensure_group()
+                    diddisend_group_ready = True
                 processed = await dispatcher.dispatch_once()
                 consumed = await consumer.read_once(block_ms=1000)
+                consumed += await diddisend_consumer.read_once(block_ms=1000)
                 loops += 1
                 if loops % 60 == 0:
                     consumed += await consumer.reclaim_once()
+                    consumed += await diddisend_consumer.reclaim_once()
                 now = time.monotonic()
                 if now - last_metrics_refresh >= settings.worker_metrics_refresh_seconds:
                     await dispatcher.refresh_metrics()
                     await consumer.refresh_metrics()
+                    await diddisend_consumer.refresh_metrics()
                     await shared_set_gauge(
                         local_redis,
                         settings.redis_key("metrics:worker"),
@@ -167,6 +184,7 @@ async def run_worker() -> None:
             except Exception as exc:
                 consecutive_failures += 1
                 group_ready = False
+                diddisend_group_ready = False
                 with suppress(Exception):
                     await shared_set_gauge(
                         local_redis,
@@ -182,6 +200,7 @@ async def run_worker() -> None:
                 await asyncio.sleep(delay)
     finally:
         await support_events_redis.aclose()
+        await diddisend_events_redis.aclose()
         await local_redis.aclose()
 
 

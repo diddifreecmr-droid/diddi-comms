@@ -79,3 +79,53 @@ async def test_context_resolver_uses_owner_contract() -> None:
         UUID("22222222-2222-2222-2222-222222222222"),
         UUID("33333333-3333-3333-3333-333333333333"),
     }
+
+
+@pytest.mark.asyncio
+async def test_context_resolver_normalizes_diddisend_delivery_contract() -> None:
+    token_client = FakeTokenClient()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "contract_version": "delivery-task-context.v1",
+                "task": {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "type": "delivery",
+                    "status": "in_transit",
+                    "version": 4,
+                },
+                "participants": [
+                    {
+                        "user_id": "22222222-2222-2222-2222-222222222222",
+                        "role": "sender",
+                        "communication": "allowed",
+                    }
+                ],
+                "communication_policy": {
+                    "conversation": "active",
+                    "external_call": "request_via_diddicomms",
+                },
+                "privacy": {"phone_numbers_included": False},
+            },
+        )
+
+    resolver = ContextResolverClient(
+        OwnerServiceConfig(
+            name="diddisend",
+            base_url="https://send.test",
+            context_scope="diddisend:comms:delivery-context:read",
+            service_token_client=token_client,  # type: ignore[arg-type]
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    context = await resolver.get_task("delivery", UUID("11111111-1111-1111-1111-111111111111"))
+
+    assert context.task.owner_service == "diddisend"
+    assert context.state == "in_transit"
+    assert context.version == 4
+    assert context.messaging_allowed is True
+    assert context.calling_allowed is True
+    assert context.participants[0].phone_e164 is None

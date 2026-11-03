@@ -53,6 +53,9 @@ services:
       ALEMBIC_DATABASE_URL: postgresql+psycopg://diddicomms:diddicomms@postgres:5432/diddicomms_local
       REDIS_URL: redis://redis:6379/0
       SUPPORT_EVENTS_REDIS_URL: redis://host.docker.internal:${DIDDISUPPORT_REDIS_HOST_PORT:-16382}/0
+      DIDDISEND_EVENTS_REDIS_URL: redis://host.docker.internal:${DIDDISEND_REDIS_HOST_PORT:-16382}/0
+      DIDDISEND_EVENTS_STREAM: ${DIDDISEND_EVENTS_STREAM:-diddisend.events}
+      DIDDISEND_EVENTS_CONSUMER_GROUP: ${DIDDISEND_EVENTS_CONSUMER_GROUP:-diddicomms-delivery}
     command: ["python", "-m", "app_base.modules.events.worker"]
     extra_hosts:
       - "host.docker.internal:host-gateway"

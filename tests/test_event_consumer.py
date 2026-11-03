@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from app_base.modules.events.consumer import InboundEvent, SupportEventHandler
+from app_base.modules.events.consumer import DiddiSendDeliveryEventHandler, InboundEvent, SupportEventHandler
 
 CASE_ID = UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa")
 CONVERSATION_ID = UUID("bbbbbbbb-2222-2222-2222-bbbbbbbbbbbb")
@@ -36,6 +36,22 @@ def test_inbound_event_parses_aggregate_version() -> None:
     assert event.event_id == EVENT_ID
     assert event.aggregate_version == 9
     assert event.payload["message_id"] == "message-1"
+
+
+def test_inbound_event_parses_diddisend_flat_event() -> None:
+    event = InboundEvent.from_stream_fields(
+        {
+            "event_id": str(EVENT_ID),
+            "event_version": "1",
+            "source_service": "diddisend",
+            "name": "delivery.status_changed",
+            "aggregate_id": "delivery-1",
+            "payload": json.dumps({"status": "in_transit", "phone": "+237000000000"}),
+        }
+    )
+
+    assert event.event_type == "delivery.status_changed"
+    assert event.source_service == "diddisend"
 
 
 def test_inbound_event_parses_canonical_diddisupport_envelope() -> None:
@@ -145,6 +161,27 @@ async def test_support_message_event_emits_body_free_comms_notification(monkeypa
     assert len(session.added) == 1
     outbox = session.added[0]
     assert outbox.event_type == "comms.support.message.created.v1"
+    assert "body" not in outbox.payload
+
+
+@pytest.mark.asyncio
+async def test_diddisend_event_emits_safe_work_without_private_payload() -> None:
+    session = FakeSession()
+    event = InboundEvent(
+        event_id=EVENT_ID,
+        event_type="delivery.status_changed",
+        aggregate_id="delivery-1",
+        payload={"status": "in_transit", "phone": "+237000000000", "body": "private"},
+        source_service="diddisend",
+    )
+
+    await DiddiSendDeliveryEventHandler().handle(session, event)  # type: ignore[arg-type]
+
+    assert len(session.added) == 2
+    outbox = session.added[1]
+    assert outbox.event_type == "comms.delivery.event.received.v1"
+    assert outbox.payload["status"] == "in_transit"
+    assert "phone" not in outbox.payload
     assert "body" not in outbox.payload
 
 
