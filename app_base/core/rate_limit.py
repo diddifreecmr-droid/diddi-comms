@@ -59,6 +59,65 @@ async def enforce_rate_limit(
         )
 
 
+async def check_rate_limit(
+    request: Request,
+    *,
+    bucket: str,
+    subject: str,
+    limit: int,
+    window_seconds: int,
+) -> None:
+    """Check a quota without consuming it; consume it after the action succeeds."""
+    redis: Any = getattr(request.app.state, "redis", None)
+    if redis is None:
+        if settings.environment == "production":
+            raise ApiError(503, "RATE_LIMITER_UNAVAILABLE", "Rate limiting is temporarily unavailable.")
+        return
+    key = settings.redis_key(f"rate:{bucket}:{subject}")
+    current = int(await redis.get(key) or 0)
+    if current >= limit:
+        retry_after = max(int(await redis.ttl(key)), 1)
+        operation, _, dimension = bucket.partition(":")
+        increment(
+            "diddicomms_rate_limit_denials_total",
+            {"operation": operation, "dimension": dimension or "unspecified"},
+        )
+        details = None
+        if settings.rate_limit_debug_details:
+            details = {
+                "operation": operation,
+                "dimension": dimension or "unspecified",
+                "limit": limit,
+                "window_seconds": window_seconds,
+                "current_count": current,
+                "retry_after_seconds": retry_after,
+            }
+        raise ApiError(
+            429,
+            "RATE_LIMIT_EXCEEDED",
+            "Too many successful operations. Retry after the indicated delay.",
+            headers={"Retry-After": str(retry_after)},
+            details=details,
+        )
+
+
+async def record_rate_limit_success(
+    request: Request,
+    *,
+    bucket: str,
+    subject: str,
+    window_seconds: int,
+) -> None:
+    """Consume one successful-operation quota after the remote operation succeeds."""
+    redis: Any = getattr(request.app.state, "redis", None)
+    if redis is None:
+        if settings.environment == "production":
+            raise ApiError(503, "RATE_LIMITER_UNAVAILABLE", "Rate limiting is temporarily unavailable.")
+        return
+    key = settings.redis_key(f"rate:{bucket}:{subject}")
+    await redis.eval(_FIXED_WINDOW_SCRIPT, 1, key, window_seconds)
+
+
 async def enforce_user_conversation_limits(
     request: Request,
     *,

@@ -21,7 +21,12 @@ from app_base.core.auth_deps import (
 )
 from app_base.core.database import get_session
 from app_base.core.errors import ApiError
-from app_base.core.rate_limit import enforce_rate_limit, enforce_user_conversation_limits
+from app_base.core.rate_limit import (
+    check_rate_limit,
+    enforce_rate_limit,
+    enforce_user_conversation_limits,
+    record_rate_limit_success,
+)
 from app_base.core.settings import settings
 from app_base.modules.calls.application import CreateCallAttemptService, RecordCallClientResultService
 from app_base.modules.context.domain import TaskReference
@@ -1067,20 +1072,29 @@ async def _open_support_for_user(
     if not idempotency_key:
         raise ApiError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required.")
     client_ip = request.client.host if request.client else "unknown"
-    for dimension, subject_value in (
+    for dimension, subject_value in (("user", str(requester_user_id)), ("ip", client_ip)):
+        await enforce_rate_limit(
+            request,
+            bucket=f"support-case-request:{dimension}",
+            subject=subject_value,
+            limit=settings.support_case_request_rate_limit_per_minute,
+            window_seconds=60,
+        )
+    success_quota = (
         ("user", str(requester_user_id)),
         ("task", str(task.task_id) if task else "general"),
         ("ip", client_ip),
-    ):
-        await enforce_rate_limit(
+    )
+    for dimension, subject_value in success_quota:
+        await check_rate_limit(
             request,
-            bucket=f"support-case:{dimension}",
+            bucket=f"support-case-success:{dimension}",
             subject=subject_value,
             limit=settings.support_case_rate_limit_per_hour,
             window_seconds=3600,
         )
     try:
-        return await SupportCaseService(session).open_case(
+        result = await SupportCaseService(session).open_case(
             requester_user_id=requester_user_id,
             subject=subject,
             priority=priority,
@@ -1091,6 +1105,14 @@ async def _open_support_for_user(
             request_id=getattr(request.state, "request_id", None),
             idempotency_key=idempotency_key,
         )
+        for dimension, subject_value in success_quota:
+            await record_rate_limit_success(
+                request,
+                bucket=f"support-case-success:{dimension}",
+                subject=subject_value,
+                window_seconds=3600,
+            )
+        return result
     except PermissionError as exc:
         code = str(exc)
         if code == "ACTOR_NOT_TASK_PARTICIPANT":

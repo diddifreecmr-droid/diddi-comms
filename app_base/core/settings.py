@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     message_rate_limit_per_minute: int = Field(default=30, ge=1, le=1000)
     call_rate_limit_per_five_minutes: int = Field(default=5, ge=1, le=100)
     support_case_rate_limit_per_hour: int = Field(default=10, ge=1, le=100)
+    support_case_request_rate_limit_per_minute: int = Field(default=30, ge=1, le=1000)
     rate_limit_debug_details: bool = False
     events_stream_maxlen: int = Field(default=100_000, ge=1_000)
     events_dlq_stream_maxlen: int = Field(default=10_000, ge=100)

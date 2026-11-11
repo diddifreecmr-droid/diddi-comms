@@ -5,7 +5,7 @@ from starlette.requests import Request
 
 from app_base.core.errors import ApiError
 from app_base.core.metrics import render_prometheus, reset_metrics
-from app_base.core.rate_limit import enforce_rate_limit
+from app_base.core.rate_limit import check_rate_limit, enforce_rate_limit, record_rate_limit_success
 from app_base.core.settings import settings
 
 
@@ -15,8 +15,16 @@ class FakeRedis:
         self.calls = []
 
     async def eval(self, *args):
-        self.calls.append(args)
+        self.calls.append(("eval", *args))
         return self.result
+
+    async def get(self, key):
+        self.calls.append(("get", key))
+        return self.result[0]
+
+    async def ttl(self, key):
+        self.calls.append(("ttl", key))
+        return self.result[1]
 
 
 def _request(redis) -> Request:
@@ -81,3 +89,26 @@ async def test_rate_limit_debug_details_are_opt_in(monkeypatch) -> None:
         "current_count": 31,
         "retry_after_seconds": 42,
     }
+
+
+@pytest.mark.asyncio
+async def test_success_quota_check_does_not_consume_until_recorded() -> None:
+    redis = FakeRedis([3, 42])
+    request = _request(redis)
+
+    await check_rate_limit(
+        request,
+        bucket="support-case-success:user",
+        subject="user-1",
+        limit=10,
+        window_seconds=3600,
+    )
+    await record_rate_limit_success(
+        request,
+        bucket="support-case-success:user",
+        subject="user-1",
+        window_seconds=3600,
+    )
+
+    assert any(call[0] == "get" for call in redis.calls)
+    assert any(call[0] == "eval" for call in redis.calls)
