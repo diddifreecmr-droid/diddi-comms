@@ -6,6 +6,7 @@ from starlette.requests import Request
 from app_base.core.errors import ApiError
 from app_base.core.metrics import render_prometheus, reset_metrics
 from app_base.core.rate_limit import enforce_rate_limit
+from app_base.core.settings import settings
 
 
 class FakeRedis:
@@ -56,3 +57,27 @@ async def test_rate_limit_returns_stable_429_and_retry_after() -> None:
     assert exc.value.code == "RATE_LIMIT_EXCEEDED"
     assert exc.value.headers == {"Retry-After": "42"}
     assert 'diddicomms_rate_limit_denials_total{dimension="user",operation="message"} 1' in render_prometheus()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_debug_details_are_opt_in(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "rate_limit_debug_details", True)
+    redis = FakeRedis([31, 42])
+
+    with pytest.raises(ApiError) as exc:
+        await enforce_rate_limit(
+            _request(redis),
+            bucket="support-case:ip",
+            subject="127.0.0.1",
+            limit=10,
+            window_seconds=3600,
+        )
+
+    assert exc.value.details == {
+        "operation": "support-case",
+        "dimension": "ip",
+        "limit": 10,
+        "window_seconds": 3600,
+        "current_count": 31,
+        "retry_after_seconds": 42,
+    }

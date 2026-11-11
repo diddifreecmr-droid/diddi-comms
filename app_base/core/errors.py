@@ -18,19 +18,24 @@ class ApiError(Exception):
         message: str,
         *,
         headers: dict[str, str] | None = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
         self.headers = headers or {}
+        self.details = details
 
 
 async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
     if exc.status_code in {401, 403}:
         increment("diddicomms_auth_denials_total", {"code": exc.code, "status_code": exc.status_code})
+    error = {"code": exc.code, "message": exc.message, "request_id": request.state.request_id}
+    if exc.details is not None:
+        error["details"] = exc.details
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": exc.code, "message": exc.message, "request_id": request.state.request_id}},
+        content={"error": error},
         headers=exc.headers,
     )
 

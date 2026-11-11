@@ -40,11 +40,22 @@ async def enforce_rate_limit(
             "diddicomms_rate_limit_denials_total",
             {"operation": operation, "dimension": dimension or "unspecified"},
         )
+        details = None
+        if settings.rate_limit_debug_details:
+            details = {
+                "operation": operation,
+                "dimension": dimension or "unspecified",
+                "limit": limit,
+                "window_seconds": window_seconds,
+                "current_count": int(current),
+                "retry_after_seconds": retry_after,
+            }
         raise ApiError(
             429,
             "RATE_LIMIT_EXCEEDED",
             "Too many requests. Retry after the indicated delay.",
             headers={"Retry-After": str(retry_after)},
+            details=details,
         )
 
 

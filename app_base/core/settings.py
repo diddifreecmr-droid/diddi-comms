@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     message_rate_limit_per_minute: int = Field(default=30, ge=1, le=1000)
     call_rate_limit_per_five_minutes: int = Field(default=5, ge=1, le=100)
     support_case_rate_limit_per_hour: int = Field(default=10, ge=1, le=100)
+    rate_limit_debug_details: bool = False
     events_stream_maxlen: int = Field(default=100_000, ge=1_000)
     events_dlq_stream_maxlen: int = Field(default=10_000, ge=100)
 
@@ -79,6 +80,8 @@ class Settings(BaseSettings):
             raise ValueError("API_PREFIX must remain /comms/v1 for the DiddiComms MVP contract")
         if self.environment == "production" and self.metrics_bearer_token == "local-dev-metrics-token":
             raise ValueError("production must not use the local development metrics token")
+        if self.environment == "production" and self.rate_limit_debug_details:
+            raise ValueError("RATE_LIMIT_DEBUG_DETAILS must remain disabled in production")
         if self.websocket_idle_timeout_seconds <= self.websocket_heartbeat_seconds:
             raise ValueError("WEBSOCKET_IDLE_TIMEOUT_SECONDS must exceed WEBSOCKET_HEARTBEAT_SECONDS")
         return self
