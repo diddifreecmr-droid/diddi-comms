@@ -52,6 +52,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://diddicomms:diddicomms@postgres:5432/diddicomms_local
       ALEMBIC_DATABASE_URL: postgresql+psycopg://diddicomms:diddicomms@postgres:5432/diddicomms_local
       REDIS_URL: redis://redis:6379/0
+      CORS_ALLOWED_ORIGIN_REGEX: ${CORS_ALLOWED_ORIGIN_REGEX:-^https?://(localhost|127\.0\.0\.1)(:\d+)?$}
       SUPPORT_EVENTS_REDIS_URL: redis://host.docker.internal:${DIDDISUPPORT_REDIS_HOST_PORT:-16382}/0
       DIDDISEND_EVENTS_REDIS_URL: redis://host.docker.internal:${DIDDISEND_REDIS_HOST_PORT:-16382}/0
       DIDDISEND_EVENTS_STREAM: ${DIDDISEND_EVENTS_STREAM:-diddisend.events}

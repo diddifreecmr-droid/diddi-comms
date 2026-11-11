@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     environment: str = Field(default="local", validation_alias=AliasChoices("ENVIRONMENT", "APP_ENV"))
     api_prefix: str = "/comms/v1"
     log_level: str = "INFO"
+    cors_allowed_origins: str = ""
+    cors_allowed_origin_regex: str = ""
 
     database_url: str = "postgresql+asyncpg://diddicomms:diddicomms@localhost:15442/diddicomms_local"
     alembic_database_url: str = "postgresql+psycopg://diddicomms:diddicomms@localhost:15442/diddicomms_local"
@@ -83,6 +85,9 @@ class Settings(BaseSettings):
 
     def redis_key(self, suffix: str) -> str:
         return f"{self.redis_key_prefix}:{suffix}"
+
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
     def owner_service_resolvers(self) -> dict[str, Any]:
         from app_base.modules.context.infra.factory import ResolverSettings

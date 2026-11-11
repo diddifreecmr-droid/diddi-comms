@@ -47,6 +47,8 @@ services:
       ALEMBIC_DATABASE_URL: postgresql+psycopg://${DIDDICOMMS_POSTGRES_USER:-diddicomms}:${DIDDICOMMS_POSTGRES_PASSWORD:-change-me}@postgres:5432/${DIDDICOMMS_POSTGRES_DB:-diddicomms}
       REDIS_URL: redis://redis:6379/0
       REDIS_KEY_PREFIX: diddicomms
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      CORS_ALLOWED_ORIGIN_REGEX: ${CORS_ALLOWED_ORIGIN_REGEX:-^https?://(localhost|127\.0\.0\.1)(:\d+)?$}
       IDENTITY_ISSUER: ${IDENTITY_ISSUER:-diddifree-id}
       IDENTITY_AUDIENCE: diddicomms
       IDENTITY_JWKS_URL: ${IDENTITY_JWKS_URL}

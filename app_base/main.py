@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,6 +23,15 @@ configure_logging(settings.log_level)
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 configure_tracing(app, engine, endpoint=settings.otel_exporter_otlp_endpoint, service_name=settings.app_name)
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins(),
+    allow_origin_regex=settings.cors_allowed_origin_regex or None,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
 app.add_exception_handler(ApiError, api_error_handler)
 app.add_exception_handler(SQLAlchemyError, infrastructure_error_handler)
 app.add_exception_handler(RedisError, infrastructure_error_handler)
