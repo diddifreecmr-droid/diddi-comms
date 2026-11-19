@@ -39,6 +39,28 @@ def test_json_formatter_keeps_only_safe_structured_context() -> None:
     assert "body" not in payload
 
 
+def test_json_formatter_includes_redacted_exception_details() -> None:
+    try:
+        raise ConnectionError("redis://host:6379 refused client_secret=secret")
+    except ConnectionError:
+        record = logging.LogRecord(
+            name="diddicomms.worker",
+            level=logging.ERROR,
+            pathname=__file__,
+            lineno=1,
+            msg="worker_loop_failed",
+            args=(),
+            exc_info=__import__("sys").exc_info(),
+        )
+        record.worker_phase = "ensure_support_group"
+
+    payload = json.loads(JsonRedactingFormatter().format(record))
+
+    assert payload["worker_phase"] == "ensure_support_group"
+    assert payload["exception_type"] == "ConnectionError"
+    assert "client_secret=secret" not in payload["exception"]
+
+
 def test_prometheus_renderer_distinguishes_counters_and_gauges() -> None:
     reset_metrics()
     increment("test_events_total", {"outcome": "ok"})

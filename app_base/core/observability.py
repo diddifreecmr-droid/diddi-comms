@@ -20,7 +20,15 @@ def redact_text(value: str) -> str:
 
 
 class JsonRedactingFormatter(logging.Formatter):
-    safe_extra_fields = ("request_id", "event_id", "event_type", "stream_id", "failure_type")
+    safe_extra_fields = (
+        "request_id",
+        "event_id",
+        "event_type",
+        "stream_id",
+        "failure_type",
+        "worker_phase",
+        "retry_seconds",
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -44,6 +52,8 @@ class JsonRedactingFormatter(logging.Formatter):
             pass
         if record.exc_info:
             payload["exception_type"] = record.exc_info[0].__name__
+            if record.exc_info[1] is not None:
+                payload["exception"] = redact_text(str(record.exc_info[1]))
         return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 

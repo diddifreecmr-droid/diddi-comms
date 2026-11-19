@@ -146,26 +146,38 @@ async def run_worker() -> None:
         diddisend_group_ready = False
         loops = 0
         last_metrics_refresh = 0.0
+        phase = "startup"
         while True:
             try:
+                phase = "ensure_support_group"
                 if not group_ready:
                     await consumer.ensure_group()
                     group_ready = True
+                phase = "ensure_diddisend_group"
                 if not diddisend_group_ready:
                     await diddisend_consumer.ensure_group()
                     diddisend_group_ready = True
+                phase = "dispatch_outbox"
                 processed = await dispatcher.dispatch_once()
+                phase = "consume_support_events"
                 consumed = await consumer.read_once(block_ms=1000)
+                phase = "consume_diddisend_events"
                 consumed += await diddisend_consumer.read_once(block_ms=1000)
                 loops += 1
                 if loops % 60 == 0:
+                    phase = "reclaim_support_events"
                     consumed += await consumer.reclaim_once()
+                    phase = "reclaim_diddisend_events"
                     consumed += await diddisend_consumer.reclaim_once()
                 now = time.monotonic()
                 if now - last_metrics_refresh >= settings.worker_metrics_refresh_seconds:
+                    phase = "refresh_outbox_metrics"
                     await dispatcher.refresh_metrics()
+                    phase = "refresh_support_metrics"
                     await consumer.refresh_metrics()
+                    phase = "refresh_diddisend_metrics"
                     await diddisend_consumer.refresh_metrics()
+                    phase = "publish_worker_metrics"
                     await shared_set_gauge(
                         local_redis,
                         settings.redis_key("metrics:worker"),
@@ -195,7 +207,12 @@ async def run_worker() -> None:
                 delay = min(2 ** min(consecutive_failures - 1, 10), settings.worker_retry_max_seconds)
                 logger.error(
                     "worker_loop_failed",
-                    extra={"failure_type": type(exc).__name__, "retry_seconds": delay},
+                    exc_info=exc,
+                    extra={
+                        "failure_type": type(exc).__name__,
+                        "retry_seconds": delay,
+                        "worker_phase": phase,
+                    },
                 )
                 await asyncio.sleep(delay)
     finally:
