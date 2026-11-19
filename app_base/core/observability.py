@@ -28,6 +28,8 @@ class JsonRedactingFormatter(logging.Formatter):
         "failure_type",
         "worker_phase",
         "retry_seconds",
+        "processed_count",
+        "consumed_count",
     )
 
     def format(self, record: logging.LogRecord) -> str:

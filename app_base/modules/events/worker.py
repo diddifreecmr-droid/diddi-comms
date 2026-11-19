@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app_base.core.database import async_session_factory, engine
 from app_base.core.metrics import shared_increment, shared_set_gauge
+from app_base.core.observability import configure_logging
 from app_base.core.redis import create_diddisend_events_redis, create_redis, create_support_events_redis
 from app_base.core.settings import settings
 from app_base.core.tracing import configure_worker_tracing
@@ -117,6 +118,8 @@ class OutboxDispatcher:
 
 
 async def run_worker() -> None:
+    configure_logging(settings.log_level)
+    logger.info("worker_started")
     configure_worker_tracing(
         engine,
         endpoint=settings.otel_exporter_otlp_endpoint,
@@ -184,6 +187,7 @@ async def run_worker() -> None:
                         "diddicomms_worker_last_success_unixtime",
                         time.time(),
                     )
+                    logger.info("worker_heartbeat", extra={"processed_count": processed, "consumed_count": consumed})
                     last_metrics_refresh = now
                 consecutive_failures = 0
                 await shared_set_gauge(
