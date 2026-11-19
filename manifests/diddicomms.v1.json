@@ -401,6 +401,7 @@
       {"name": "comms.call_attempt.client_result_recorded.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "implemented"},
       {"name": "comms.support.case_opened.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
       {"name": "comms.support.message.created.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
+      {"name": "comms.support.ai_context_updated.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
       {"name": "comms.support.case_resolved.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"},
       {"name": "comms.delivery.event.received.v1", "schema": "docs/diddiconnect/fixtures/event-envelope.v1.json", "status": "partial"}
     ],

@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     task_conversation_grace_minutes: int = Field(default=60, ge=0)
     message_retention_days: int = Field(default=180, gt=0)
     outbox_max_attempts: int = Field(default=5, ge=1, le=20)
+    ai_enabled: bool = False
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str | None = None
+    openrouter_primary_model: str = "deepseek/deepseek-v4.1-flash-1017"
+    openrouter_fallback_model: str = "minimax/minimax-m3.1-flash"
+    openrouter_reasoning_effort: str = "low"
+    jev_model: str = "typesafe/jev-1.14"
+    jev_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    decision_gate_confidence_threshold: float = Field(default=0.80, ge=0, le=1)
+    decision_gate_history_messages: int = Field(default=4, ge=0, le=20)
     worker_retry_max_seconds: int = Field(default=30, ge=1, le=300)
     worker_metrics_refresh_seconds: int = Field(default=10, ge=1, le=300)
     websocket_heartbeat_seconds: int = Field(default=15, ge=5, le=120)
@@ -83,6 +93,8 @@ class Settings(BaseSettings):
             raise ValueError("production must not use the local development metrics token")
         if self.environment == "production" and self.rate_limit_debug_details:
             raise ValueError("RATE_LIMIT_DEBUG_DETAILS must remain disabled in production")
+        if self.ai_enabled and not self.openrouter_api_key:
+            raise ValueError("AI_ENABLED requires OPENROUTER_API_KEY")
         if self.websocket_idle_timeout_seconds <= self.websocket_heartbeat_seconds:
             raise ValueError("WEBSOCKET_IDLE_TIMEOUT_SECONDS must exceed WEBSOCKET_HEARTBEAT_SECONDS")
         return self
