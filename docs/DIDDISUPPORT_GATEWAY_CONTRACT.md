@@ -84,11 +84,11 @@ The proposed payload is:
 }
 ```
 
-This is not claimed to be deployed in DiddiSupport yet. DiddiComms enables it
-only with `DIDDISUPPORT_AI_MESSAGES_ENABLED=true`, validates that the response
-preserves AI attribution, and never falls back to the user-message payload.
-Until DiddiSupport accepts this write contract, the AI task stops safely and
-the user message remains attributed to the user.
+DiddiSupport now implements this contract. It preserves the AI attribution,
+forces the message to `user_visible`, exposes it to the requester and
+Backoffice, rejects forged AI authors, and applies the existing idempotency
+rules. DiddiComms validates the response attribution and never falls back to
+the user-message payload.
 
 ## Conversation handoff
 

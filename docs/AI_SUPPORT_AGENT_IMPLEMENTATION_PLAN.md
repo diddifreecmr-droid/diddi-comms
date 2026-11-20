@@ -47,14 +47,13 @@ The AI remains disabled by default with `AI_ENABLED=false`.
 - OpenRouter uses the configured primary model and fallback model.
 - Human takeover and resolved/closed cases stop AI processing.
 
-### Sprint 3 — DiddiSupport assistant-message contract — DIDDICOMMS READY
+### Sprint 3 — DiddiSupport assistant-message contract — DONE
 
 - DiddiComms implements the client method and idempotency key.
 - The response must preserve `author_type` as `ai`, `assistant`, or
   `diddicomms`.
-- `DIDDISUPPORT_AI_MESSAGES_ENABLED=false` is the safe default.
-- This sprint cannot be completed end-to-end from DiddiComms alone: the
-  DiddiSupport service must accept and persist the attributed payload.
+- DiddiSupport accepts and persists the attributed payload.
+- The staging deployment must set `DIDDISUPPORT_AI_MESSAGES_ENABLED=true`.
 
 ### Sprint 4 — Audit and event handoff — DONE IN DIDDICOMMS
 
@@ -63,7 +62,7 @@ The AI remains disabled by default with `AI_ENABLED=false`.
   source-message, AI-message, and category identifiers.
 - Outbox delivery remains responsible for retry and dead-letter behavior.
 
-### Sprint 5 — Staging verification — NEXT
+### Sprint 5 — Staging verification — IN PROGRESS
 
 The opt-in staging test is now present in
 `tests/staging/test_diddicomms_diddisupport_staging.py` and is enabled with
@@ -83,6 +82,4 @@ Run only after DiddiSupport confirms the assistant-message contract:
 
 The next implementation action inside DiddiComms is staging verification and
 hardening based on the observed DiddiSupport response. No new DiddiComms route
-or local message table is to be created for AI replies. If DiddiSupport rejects
-the proposed payload, stop and update this plan with the exact response rather
-than adding a user-message fallback.
+or local message table is to be created for AI replies.
