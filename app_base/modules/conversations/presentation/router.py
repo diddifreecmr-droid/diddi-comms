@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -156,7 +156,7 @@ class MessageResponse(BaseModel):
     moderation_status: str
     delivery_status: str = "accepted"
     created_at: datetime | None = None
-    sender_type: Literal["user", "support_agent", "system"] = "user"
+    sender_type: Literal["user", "ai", "support_agent", "admin", "system"] = "user"
     sender_role: str | None = None
     created: bool | None = None
 
@@ -361,6 +361,7 @@ async def send_message(
     conversation_id: UUID,
     payload: SendMessageRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(require_current_user),
     session: AsyncSession = Depends(get_session),
@@ -397,6 +398,11 @@ async def send_message(
             code,
             "Message payload is invalid.",
         ) from exc
+
+    if result.created and settings.ai_enabled:
+        from app_base.modules.ai.application import process_support_ai_message
+
+        background_tasks.add_task(process_support_ai_message, conversation_id, result.message.id)
 
     return _message_response(result.message, created=result.created, delivery_status="accepted")
 
@@ -771,6 +777,7 @@ async def record_call_client_result(
 async def open_support_case(
     payload: OpenSupportCaseRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(require_current_user),
     session: AsyncSession = Depends(get_session),
@@ -800,6 +807,10 @@ async def open_support_case(
         task=task,
         idempotency_key=idempotency_key,
     )
+    if payload.initial_message and settings.ai_enabled:
+        from app_base.modules.ai.application import process_latest_support_ai_message
+
+        background_tasks.add_task(process_latest_support_ai_message, result.conversation.id)
     return _support_case_response(result.case)
 
 
@@ -811,6 +822,7 @@ async def open_support_case(
 async def open_support_conversation(
     payload: OpenSupportConversationRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(require_current_user),
     session: AsyncSession = Depends(get_session),
@@ -843,6 +855,10 @@ async def open_support_conversation(
         task=task,
         idempotency_key=idempotency_key,
     )
+    if payload.message and settings.ai_enabled:
+        from app_base.modules.ai.application import process_latest_support_ai_message
+
+        background_tasks.add_task(process_latest_support_ai_message, result.conversation.id)
     case = result.case
     return SupportConversationResponse(
         conversation_id=result.conversation.id,
@@ -1194,7 +1210,11 @@ def _support_conversation_summary(case) -> SupportConversationSummary:
     )
 
 
-def _sender_type(sender_role: str | None) -> Literal["user", "support_agent", "system"]:
+def _sender_type(sender_role: str | None) -> Literal["user", "ai", "support_agent", "admin", "system"]:
+    if sender_role in {"ai", "assistant"}:
+        return "ai"
+    if sender_role in {"admin", "backoffice_admin"}:
+        return "admin"
     if sender_role in {"support_agent", "agent", "backoffice"}:
         return "support_agent"
     if sender_role == "system":
@@ -1202,7 +1222,11 @@ def _sender_type(sender_role: str | None) -> Literal["user", "support_agent", "s
     return "user"
 
 
-def _remote_sender_type(author_type: str) -> Literal["user", "support_agent", "system"]:
+def _remote_sender_type(author_type: str) -> Literal["user", "ai", "support_agent", "admin", "system"]:
+    if author_type in {"ai", "assistant", "diddicomms"}:
+        return "ai"
+    if author_type in {"admin", "backoffice_admin", "backoffice_operator"}:
+        return "admin"
     if author_type in {"agent", "support_agent"}:
         return "support_agent"
     if author_type == "system":
@@ -1211,6 +1235,10 @@ def _remote_sender_type(author_type: str) -> Literal["user", "support_agent", "s
 
 
 def _remote_sender_role(author_type: str) -> str:
+    if author_type in {"ai", "assistant", "diddicomms"}:
+        return "ai"
+    if author_type in {"admin", "backoffice_admin", "backoffice_operator"}:
+        return "admin"
     if author_type in {"agent", "support_agent"}:
         return "support_agent"
     if author_type == "system":

@@ -223,6 +223,65 @@ async def test_sends_user_message_with_visibility_and_idempotency() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sends_ai_message_with_explicit_attribution() -> None:
+    seen: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen
+        seen = request
+        return httpx.Response(
+            201,
+            json={
+                "message_id": "eeeeeeee-5555-5555-5555-eeeeeeeeeeee",
+                "case_id": "aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa",
+                "author_type": "ai",
+                "author_id": "service:diddicomms",
+                "body": "Je vais vous aider.",
+                "visibility": "user_visible",
+            },
+        )
+
+    token_client = FakeTokenClient()
+    client = DiddiSupportReadClient(
+        DiddiSupportReadConfig(
+            base_url="https://support.test",
+            client_id=token_client.client_id,
+            scope="diddi-support:cases:read",
+            ai_messages_enabled=True,
+            service_token_client=token_client,  # type: ignore[arg-type]
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    result = await client.send_ai_message(
+        case_id=UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"),
+        body="Je vais vous aider.",
+        idempotency_key="ai-reply-1",
+    )
+
+    assert seen is not None
+    assert json.loads(seen.content) == {
+        "author_type": "ai",
+        "author_id": "service:diddicomms",
+        "body": "Je vais vous aider.",
+    }
+    assert result.author_type == "ai"
+
+
+@pytest.mark.asyncio
+async def test_ai_message_contract_is_fail_closed_by_default() -> None:
+    client, _ = make_client(lambda request: httpx.Response(500))
+
+    with pytest.raises(ApiError) as exc:
+        await client.send_ai_message(
+            case_id=UUID("aaaaaaaa-1111-1111-1111-aaaaaaaaaaaa"),
+            body="No fallback to user attribution.",
+            idempotency_key="ai-reply-2",
+        )
+
+    assert exc.value.code == "DIDDISUPPORT_AI_MESSAGE_CONTRACT_MISSING"
+
+
+@pytest.mark.asyncio
 async def test_reads_only_user_visible_support_messages() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

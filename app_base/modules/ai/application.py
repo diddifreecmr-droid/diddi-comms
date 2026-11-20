@@ -12,21 +12,21 @@ from app_base.modules.ai.provider import AIProviderError, OpenRouterClient
 from app_base.modules.audit.application import AuditEventDraft, AuditRecorder
 from app_base.modules.conversations.domain import ConversationState
 from app_base.modules.conversations.infra.models import ConversationModel, MessageModel
-from app_base.modules.conversations.infra.repositories import ConversationRepository, MessageRepository
+from app_base.modules.conversations.infra.repositories import (
+    ConversationRepository,
+    MessageRepository,
+    SupportCaseRepository,
+)
 from app_base.modules.events.application import OutboxWriter
 from app_base.modules.events.domain import OutboxEventDraft
+from app_base.modules.support.factory import diddisupport_read_client
 
 logger = logging.getLogger(__name__)
+FALLBACK_REPLY = "Your message has been sent to our support team. They will review it and get back to you."
 
 
 async def process_support_ai_message(conversation_id: UUID, source_message_id: UUID) -> None:
-    """Generate one AI reply after a committed user message.
-
-    The background task is deliberately idempotent: the generated message uses
-    the source message ID as its client message ID. Human takeover and closed
-    conversations are checked again before the AI message is persisted.
-    """
-
+    """Process a committed user message against remote DiddiSupport history."""
     async with async_session_factory() as session:
         try:
             await _process(session, conversation_id, source_message_id)
@@ -37,16 +37,16 @@ async def process_support_ai_message(conversation_id: UUID, source_message_id: U
 
 
 async def process_latest_support_ai_message(conversation_id: UUID) -> None:
+    """Process the initial message created while opening a support case."""
     async with async_session_factory() as session:
         try:
-            messages = MessageRepository(session)
-            history = await messages.list_after(conversation_id=conversation_id, after_sequence=0, limit=100)
-            source = next(
-                (message for message in reversed(history) if message.sender_user_id != settings.ai_actor_user_id),
-                None,
+            messages = await MessageRepository(session).list_after(
+                conversation_id=conversation_id,
+                after_sequence=0,
+                limit=100,
             )
-            if source is not None:
-                await _process(session, conversation_id, source.id)
+            if messages:
+                await _process(session, conversation_id, messages[-1].id)
             await session.commit()
         except Exception:
             await session.rollback()
@@ -55,46 +55,41 @@ async def process_latest_support_ai_message(conversation_id: UUID) -> None:
 
 async def _process(session: AsyncSession, conversation_id: UUID, source_message_id: UUID) -> None:
     conversations = ConversationRepository(session)
-    messages = MessageRepository(session)
     conversation = await conversations.find_by_id(conversation_id)
     source = await session.get(MessageModel, source_message_id)
     if conversation is None or source is None or conversation.conversation_type != "support":
         return
     if ConversationState(conversation.state) not in {ConversationState.ACTIVE, ConversationState.CLOSING}:
         return
-    participants = await conversations.participants_for(conversation_id)
-    if any(p.role in {"support_agent", "admin"} for p in participants):
+    case = await SupportCaseRepository(session).find_by_conversation(conversation_id)
+    if case is None or case.status in {"resolved", "closed"}:
         return
-    if not any(p.user_id == settings.ai_actor_user_id for p in participants):
-        conversations.add_participant(
-            conversation_id=conversation_id,
-            user_id=settings.ai_actor_user_id,
-            role="ai",
-            permissions="assistant",
-        )
+    participants = await conversations.participants_for(conversation_id)
+    if case.assigned_to_user_id is not None or any(
+        participant.role in {"support_agent", "admin"} for participant in participants
+    ):
+        return
 
-    history_models = await messages.list_after(conversation_id=conversation_id, after_sequence=0, limit=50)
-    history = [m.body for m in history_models if m.sender_user_id != settings.ai_actor_user_id]
+    client = diddisupport_read_client()
+    remote_history = await client.list_user_visible_messages(case.external_case_id)
+    history = [
+        message.body
+        for message in remote_history
+        if message.author_type not in {"ai", "assistant", "diddicomms"}
+    ]
     try:
         decision = await JevDecisionGate().classify(message=source.body, history=history[:-1])
     except DecisionGateError:
-        _record_gate_handoff(session, conversation, source)
-        await _persist_ai_response(
-            session,
-            conversation,
-            source,
-            "Your message has been sent to our support team. They will review it and get back to you.",
-            category="needs_human",
-        )
+        await _send_reply(session, case.external_case_id, conversation, source, FALLBACK_REPLY, "needs_human")
         return
+
     if decision.route != "support_allowed":
-        _record_gate_handoff(session, conversation, source, route=decision.route)
-        response = (
+        body = (
             "I can help with Diddi support questions. Your message has been sent to our support team."
             if decision.route == "needs_human"
             else "I can only help with Diddi support questions. Please describe the issue you are experiencing."
         )
-        await _persist_ai_response(session, conversation, source, response, category=decision.category)
+        await _send_reply(session, case.external_case_id, conversation, source, body, decision.category)
         return
 
     try:
@@ -103,7 +98,7 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
                 {
                     "role": "system",
                     "content": (
-                        "You are DiddiComms support assistant. Answer only about the user's support request. "
+                        "You are the DiddiComms support assistant. Answer only about the user's support request. "
                         "Do not act as a general chatbot. Ask concise clarifying questions when needed."
                     ),
                 },
@@ -111,80 +106,56 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
             ],
             max_tokens=500,
         )
+        body = completion.content
+        category = decision.category
     except AIProviderError:
-        _record_gate_handoff(session, conversation, source, route="needs_human")
-        await _persist_ai_response(
-            session,
-            conversation,
-            source,
-            "Your message has been sent to our support team. They will review it and get back to you.",
-            category=decision.category,
-        )
-        return
+        body = FALLBACK_REPLY
+        category = "needs_human"
 
-    await _persist_ai_response(session, conversation, source, completion.content, category=decision.category)
+    await _send_reply(session, case.external_case_id, conversation, source, body, category)
 
 
-async def _persist_ai_response(
+async def _send_reply(
     session: AsyncSession,
+    case_id: UUID,
     conversation: ConversationModel,
     source: MessageModel,
     body: str,
-    *,
     category: str,
 ) -> None:
-    messages = MessageRepository(session)
-    existing = await messages.find_by_client_message(
-        sender_user_id=settings.ai_actor_user_id,
-        client_message_id=f"ai-reply-{source.id}",
-    )
-    if existing is not None:
-        return
-    ai_message = messages.add_message(
-        conversation=conversation,
-        sender_user_id=settings.ai_actor_user_id,
-        client_message_id=f"ai-reply-{source.id}",
+    remote_message = await diddisupport_read_client().send_ai_message(
+        case_id=case_id,
         body=body,
+        idempotency_key=f"ai-reply-{source.id}",
     )
     AuditRecorder(session).add(
         AuditEventDraft(
-            actor_user_id=settings.ai_actor_user_id,
+            actor_service="diddicomms",
             action="support.ai_message.created",
-            target_type="message",
-            target_id=str(ai_message.id),
+            target_type="support_message",
+            target_id=str(remote_message.message_id),
             outcome="succeeded",
-            safe_metadata={"source_message_id": str(source.id), "category": category},
+            idempotency_key=f"ai-reply-{source.id}",
+            safe_metadata={
+                "case_id": str(case_id),
+                "conversation_id": str(conversation.id),
+                "source_message_id": str(source.id),
+                "category": category,
+                "author_type": remote_message.author_type,
+            },
         )
     )
     OutboxWriter(session).add(
         OutboxEventDraft(
             aggregate_type="support_case",
-            aggregate_id=str(conversation.task_id),
+            aggregate_id=str(case_id),
             event_type="comms.support.ai_context_updated.v1",
             payload={
+                "case_id": str(case_id),
                 "conversation_id": str(conversation.id),
                 "source_message_id": str(source.id),
-                "ai_message_id": str(ai_message.id),
+                "ai_message_id": str(remote_message.message_id),
                 "category": category,
             },
-        )
-    )
-
-
-def _record_gate_handoff(
-    session: AsyncSession,
-    conversation: ConversationModel,
-    source: MessageModel,
-    *,
-    route: str = "needs_human",
-) -> None:
-    AuditRecorder(session).add(
-        AuditEventDraft(
-            actor_user_id=settings.ai_actor_user_id,
-            action="support.ai_handoff_requested",
-            target_type="conversation",
-            target_id=str(conversation.id),
-            outcome="succeeded",
-            safe_metadata={"source_message_id": str(source.id), "route": route},
         )
     )

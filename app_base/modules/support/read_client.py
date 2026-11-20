@@ -64,6 +64,7 @@ class DiddiSupportReadConfig:
     service_token_client: ServiceTokenClient
     create_scope: str = "diddi-support:cases:create"
     messages_scope: str = "diddi-support:messages:write"
+    ai_messages_enabled: bool = False
 
 
 class DiddiSupportReadClient:
@@ -224,6 +225,70 @@ class DiddiSupportReadClient:
         except (TypeError, ValueError) as exc:
             raise ApiError(
                 502, "DIDDISUPPORT_INVALID_RESPONSE", "DiddiSupport returned an invalid message response."
+            ) from exc
+
+    async def send_ai_message(
+        self,
+        *,
+        case_id: UUID,
+        body: str,
+        idempotency_key: str,
+        request_id: str | None = None,
+    ) -> SupportMessageResponse:
+        """Write an attributed assistant message, never a user message.
+
+        The endpoint is shared with user messages, but the author attribution
+        is a separate contract. It is fail-closed until DiddiSupport enables
+        that contract; falling back to ``send_user_message`` would corrupt the
+        conversation's authorship.
+        """
+        if not self.config.ai_messages_enabled:
+            raise ApiError(
+                503,
+                "DIDDISUPPORT_AI_MESSAGE_CONTRACT_MISSING",
+                "DiddiSupport assistant-message contract is not enabled.",
+            )
+        token = await self.config.service_token_client.access_token(self.config.messages_scope)
+        headers = self._headers(token, request_id=request_id)
+        headers["Idempotency-Key"] = idempotency_key
+        payload = {"author_type": "ai", "author_id": "service:diddicomms", "body": body}
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.config.base_url.rstrip("/"),
+                timeout=self.timeout_seconds,
+                transport=self.transport,
+            ) as client:
+                response = await client.post(
+                    f"/support/v1/internal/cases/{case_id}/messages",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                response_body = response.json()
+            message = SupportMessageResponse.model_validate(response_body)
+            if message.author_type.lower() not in {"ai", "assistant", "diddicomms"}:
+                raise ValueError("DiddiSupport did not preserve AI attribution")
+            return message
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 409:
+                raise ApiError(
+                    409, "IDEMPOTENCY_CONFLICT", "The Support AI message idempotency key conflicts."
+                ) from exc
+            if status == 404:
+                raise ApiError(404, "CASE_NOT_FOUND", "The Support case was not found.") from exc
+            if status in {401, 403}:
+                raise ApiError(502, "DIDDISUPPORT_SCOPE_FORBIDDEN", "DiddiComms cannot write AI messages.") from exc
+            if status == 503:
+                raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
+            raise ApiError(502, "DIDDISUPPORT_AI_MESSAGE_REJECTED", "DiddiSupport rejected the AI message.") from exc
+        except httpx.RequestError as exc:
+            raise ApiError(503, "SUPPORT_UNAVAILABLE", "DiddiSupport is temporarily unavailable.") from exc
+        except (TypeError, ValueError) as exc:
+            raise ApiError(
+                502,
+                "DIDDISUPPORT_INVALID_RESPONSE",
+                "DiddiSupport returned an invalid AI message response.",
             ) from exc
 
     async def list_user_visible_messages(self, case_id: UUID) -> list[SupportMessageResponse]:

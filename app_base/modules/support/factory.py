@@ -33,6 +33,7 @@ def diddisupport_read_client(config: Settings = settings) -> DiddiSupportReadCli
             scope=config.diddisupport_scope,
             create_scope=config.diddisupport_create_scope,
             messages_scope=config.diddisupport_messages_scope,
+            ai_messages_enabled=config.diddisupport_ai_messages_enabled,
             service_token_client=token_client,
         ),
         timeout_seconds=config.identity_http_timeout_seconds,

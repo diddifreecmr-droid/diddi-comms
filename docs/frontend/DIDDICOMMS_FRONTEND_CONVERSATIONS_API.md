@@ -71,6 +71,7 @@ category IDs, never translated labels.
 
 Message reads and writes return `created_at`, `sender_type`, and `sender_role`
 in addition to the existing message fields. `sender_type` is one of `user`,
+`ai`, `support_agent`, `admin`,
 `support_agent`, or `system`. Use it to render message ownership. The contextual
 role can be `requester`, `passenger`, `driver`, `support_agent`, or another
 module-owned participant role. It can be `null` on the immediate acknowledgement

@@ -253,3 +253,36 @@ async def test_stale_support_event_is_ignored(monkeypatch) -> None:
 
     assert session.added == []
     assert case.support_version == 5
+
+
+@pytest.mark.asyncio
+async def test_support_assignment_updates_projection_for_ai_takeover_guard(monkeypatch) -> None:
+    assignee = UUID("eeeeeeee-5555-5555-5555-eeeeeeeeeeee")
+    case = SimpleNamespace(
+        id=CASE_ID,
+        conversation_id=CONVERSATION_ID,
+        support_version=2,
+        projection_status="pending",
+        last_reconciled_at=None,
+        assigned_to_user_id=None,
+        status="open",
+        updated_at=None,
+    )
+
+    async def fake_find(self, case_id):
+        return case
+
+    monkeypatch.setattr("app_base.modules.events.consumer.SupportCaseRepository.find_by_id", fake_find)
+    await SupportEventHandler().handle(
+        FakeSession(),
+        InboundEvent(
+            event_id=EVENT_ID,
+            event_type="support.case.assigned.v1",
+            aggregate_id=str(CASE_ID),
+            aggregate_version=3,
+            payload={"case_id": str(CASE_ID), "assigned_to_user_id": str(assignee)},
+        ),
+    )
+
+    assert case.assigned_to_user_id == assignee
+    assert case.projection_status == "synced"

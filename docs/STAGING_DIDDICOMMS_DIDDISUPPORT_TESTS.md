@@ -17,6 +17,22 @@ $env:RUN_STAGING_SMOKE_TESTS = "1"
 pytest tests/staging/test_diddicomms_diddisupport_staging.py -m staging -v
 ```
 
+## Parcours IA
+
+Après activation du contrat `author_type=ai` dans le staging Support :
+
+```powershell
+$env:RUN_STAGING_SMOKE_TESTS = "1"
+$env:RUN_STAGING_AI_TESTS = "1"
+$env:RUN_STAGING_WRITE_TESTS = "1"
+$env:DIDDICOMMS_STAGING_USER_TOKEN = "<jwt-utilisateur-staging>"
+pytest tests/staging/test_diddicomms_diddisupport_staging.py -m staging -v -k ai
+```
+
+Le test vérifie qu’une réponse IA apparaît avec `sender_type=ai`, qu’elle ne
+réapparaît pas comme message utilisateur et que la répétition de la demande
+avec la même clé d’idempotence ne crée pas une seconde réponse.
+
 Ce niveau verifie la disponibilite des deux services et la presence des routes
 HTTP du contrat. Il ne cree aucune donnee.
 

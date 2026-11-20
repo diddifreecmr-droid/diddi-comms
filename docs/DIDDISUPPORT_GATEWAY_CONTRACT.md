@@ -67,6 +67,29 @@ DiddiComms API errors and preserves the request correlation ID.
 Case assignment, resolution, and agent replies remain DiddiSupport-owned
 operations until their write contract is agreed.
 
+## AI message attribution (DiddiComms-side implementation)
+
+DiddiComms now has a fail-closed client for an assistant message on the same
+internal message route:
+
+`POST /support/v1/internal/cases/{case_id}/messages`
+
+The proposed payload is:
+
+```json
+{
+  "author_type": "ai",
+  "author_id": "service:diddicomms",
+  "body": "..."
+}
+```
+
+This is not claimed to be deployed in DiddiSupport yet. DiddiComms enables it
+only with `DIDDISUPPORT_AI_MESSAGES_ENABLED=true`, validates that the response
+preserves AI attribution, and never falls back to the user-message payload.
+Until DiddiSupport accepts this write contract, the AI task stops safely and
+the user message remains attributed to the user.
+
 ## Conversation handoff
 
 DiddiSupport emits or requests a handoff when an agent takes ownership. The

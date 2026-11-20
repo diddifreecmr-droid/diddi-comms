@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from uuid import uuid4
 
 import httpx
@@ -78,6 +79,14 @@ def test_diddicomms_staging_openapi_exposes_frontend_support_contract() -> None:
             "/comms/v1/conversations/{conversation_id}/messages": {"get", "post"},
         },
     )
+    message_schema = comms_openapi["components"]["schemas"]["MessageResponse"]
+    assert set(message_schema["properties"]["sender_type"]["enum"]) >= {
+        "user",
+        "ai",
+        "support_agent",
+        "admin",
+        "system",
+    }
 
 
 def test_diddisupport_staging_openapi_exposes_internal_comms_contract() -> None:
@@ -146,3 +155,75 @@ def test_staging_user_can_open_and_continue_general_support_conversation() -> No
 
     assert any(item.get("body") == f"Follow-up staging test message {run_id}" for item in messages)
     assert all(item.get("visibility", "user_visible") == "user_visible" for item in messages)
+
+
+def test_staging_ai_reply_is_attributed_and_idempotent() -> None:
+    if os.getenv("RUN_STAGING_AI_TESTS") != "1":
+        pytest.skip("set RUN_STAGING_AI_TESTS=1 to verify the deployed AI journey")
+    token = os.getenv("DIDDICOMMS_STAGING_USER_TOKEN")
+    if not token:
+        pytest.skip("DIDDICOMMS_STAGING_USER_TOKEN is required for the AI journey")
+
+    run_id = uuid4()
+    idempotency_key = f"staging-ai-{run_id}"
+    initial_body = f"AI staging contract check {run_id}: payment support question"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Idempotency-Key": idempotency_key,
+        "X-Request-ID": str(run_id),
+    }
+    with httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=True) as client:
+        opened = client.post(
+            f"{COMMS_BASE_URL}/comms/v1/support/conversations",
+            headers=headers,
+            json={
+                "category": "general",
+                "subject": "Automated AI staging contract check",
+                "message": initial_body,
+                "priority": "normal",
+            },
+        )
+        opened.raise_for_status()
+        conversation_id = opened.json()["conversation_id"]
+
+        deadline = time.monotonic() + float(os.getenv("STAGING_AI_WAIT_SECONDS", "30"))
+        messages: list[dict] = []
+        while time.monotonic() < deadline:
+            history = client.get(
+                f"{COMMS_BASE_URL}/comms/v1/conversations/{conversation_id}/messages",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            history.raise_for_status()
+            messages = history.json()
+            if any(item.get("sender_type") == "ai" for item in messages):
+                break
+            time.sleep(1)
+
+        ai_messages = [item for item in messages if item.get("sender_type") == "ai"]
+        assert len(ai_messages) == 1, "expected exactly one attributed AI reply"
+        assert ai_messages[0].get("sender_role") == "ai"
+        assert all(
+            item.get("sender_type") != "user" or item.get("body") != ai_messages[0].get("body")
+            for item in messages
+        )
+
+        replay = client.post(
+            f"{COMMS_BASE_URL}/comms/v1/support/conversations",
+            headers=headers,
+            json={
+                "category": "general",
+                "subject": "Automated AI staging contract check",
+                "message": initial_body,
+                "priority": "normal",
+            },
+        )
+        replay.raise_for_status()
+        assert replay.json()["conversation_id"] == conversation_id
+
+        time.sleep(2)
+        history_after_replay = client.get(
+            f"{COMMS_BASE_URL}/comms/v1/conversations/{conversation_id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        history_after_replay.raise_for_status()
+        assert len([item for item in history_after_replay.json() if item.get("sender_type") == "ai"]) == 1

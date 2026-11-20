@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     diddisupport_scope: str = "diddi-support:cases:read"
     diddisupport_create_scope: str = "diddi-support:cases:create"
     diddisupport_messages_scope: str = "diddi-support:messages:write"
+    # Disabled until DiddiSupport accepts the assistant-message attribution
+    # contract. DiddiComms must never silently send an AI reply as a user.
+    diddisupport_ai_messages_enabled: bool = False
 
     owner_service_resolvers_json: str = "{}"
 
