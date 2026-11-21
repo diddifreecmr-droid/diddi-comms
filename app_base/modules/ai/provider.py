@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from app_base.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class AIProviderError(RuntimeError):
@@ -27,11 +30,13 @@ class OpenRouterClient:
 
     async def complete(self, *, messages: list[dict[str, Any]], max_tokens: int = 500) -> AICompletion:
         if not settings.openrouter_api_key:
+            logger.error("ai_provider_unavailable", extra={"reason": "openrouter_api_key_missing"})
             raise AIProviderError("OPENROUTER_API_KEY is not configured")
 
         last_error: Exception | None = None
         for index, model in enumerate((settings.openrouter_primary_model, settings.openrouter_fallback_model)):
             try:
+                logger.info("ai_provider_model_attempt", extra={"model": model, "fallback": index > 0})
                 return await self._complete_model(
                     model=model,
                     messages=messages,
@@ -39,6 +44,10 @@ class OpenRouterClient:
                     used_fallback=index > 0,
                 )
             except (AIProviderError, httpx.HTTPError) as exc:
+                logger.warning(
+                    "ai_provider_model_failed",
+                    extra={"model": model, "fallback": index > 0, "error_type": type(exc).__name__},
+                )
                 last_error = exc
         raise AIProviderError("OpenRouter primary and fallback models failed") from last_error
 

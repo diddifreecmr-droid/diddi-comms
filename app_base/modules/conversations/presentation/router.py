@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -55,6 +56,7 @@ from app_base.modules.support.categories import SupportCategory, category_allows
 from app_base.modules.support.factory import diddisupport_read_client
 from app_base.modules.support.read_client import SupportMessageResponse as RemoteSupportMessage
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["conversations"])
 
 SUPPORT_CASES_READ_SCOPE = "diddicomms:support-cases:read"
@@ -402,7 +404,25 @@ async def send_message(
     if result.created and settings.ai_enabled:
         from app_base.modules.ai.application import process_support_ai_message
 
+        logger.info(
+            "support_ai_task_scheduled",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(result.message.id),
+                "trigger": "follow_up_message",
+            },
+        )
         background_tasks.add_task(process_support_ai_message, conversation_id, result.message.id)
+    else:
+        logger.info(
+            "support_ai_task_not_scheduled",
+            extra={
+                "conversation_id": str(conversation_id),
+                "message_created": result.created,
+                "ai_enabled": settings.ai_enabled,
+                "trigger": "follow_up_message",
+            },
+        )
 
     return _message_response(result.message, created=result.created, delivery_status="accepted")
 
@@ -810,7 +830,21 @@ async def open_support_case(
     if payload.initial_message and settings.ai_enabled:
         from app_base.modules.ai.application import process_latest_support_ai_message
 
+        logger.info(
+            "support_ai_task_scheduled",
+            extra={"conversation_id": str(result.conversation.id), "trigger": "open_support_conversation"},
+        )
         background_tasks.add_task(process_latest_support_ai_message, result.conversation.id)
+    else:
+        logger.info(
+            "support_ai_task_not_scheduled",
+            extra={
+                "conversation_id": str(result.conversation.id),
+                "has_initial_message": bool(payload.initial_message),
+                "ai_enabled": settings.ai_enabled,
+                "trigger": "open_support_conversation",
+            },
+        )
     return _support_case_response(result.case)
 
 
@@ -858,7 +892,21 @@ async def open_support_conversation(
     if payload.message and settings.ai_enabled:
         from app_base.modules.ai.application import process_latest_support_ai_message
 
+        logger.info(
+            "support_ai_task_scheduled",
+            extra={"conversation_id": str(result.conversation.id), "trigger": "open_support_case"},
+        )
         background_tasks.add_task(process_latest_support_ai_message, result.conversation.id)
+    else:
+        logger.info(
+            "support_ai_task_not_scheduled",
+            extra={
+                "conversation_id": str(result.conversation.id),
+                "has_initial_message": bool(payload.message),
+                "ai_enabled": settings.ai_enabled,
+                "trigger": "open_support_case",
+            },
+        )
     case = result.case
     return SupportConversationResponse(
         conversation_id=result.conversation.id,

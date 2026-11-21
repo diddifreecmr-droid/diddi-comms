@@ -27,17 +27,32 @@ FALLBACK_REPLY = "Your message has been sent to our support team. They will revi
 
 async def process_support_ai_message(conversation_id: UUID, source_message_id: UUID) -> None:
     """Process a committed user message against remote DiddiSupport history."""
+    logger.info(
+        "support_ai_processing_started",
+        extra={"conversation_id": str(conversation_id), "source_message_id": str(source_message_id)},
+    )
     async with async_session_factory() as session:
         try:
             await _process(session, conversation_id, source_message_id)
             await session.commit()
+            logger.info(
+                "support_ai_processing_finished",
+                extra={"conversation_id": str(conversation_id), "source_message_id": str(source_message_id)},
+            )
         except Exception:
             await session.rollback()
-            logger.exception("support_ai_processing_failed", extra={"conversation_id": str(conversation_id)})
+            logger.exception(
+                "support_ai_processing_failed",
+                extra={
+                    "conversation_id": str(conversation_id),
+                    "source_message_id": str(source_message_id),
+                },
+            )
 
 
 async def process_latest_support_ai_message(conversation_id: UUID) -> None:
     """Process the initial message created while opening a support case."""
+    logger.info("support_ai_initial_processing_started", extra={"conversation_id": str(conversation_id)})
     async with async_session_factory() as session:
         try:
             messages = await MessageRepository(session).list_after(
@@ -48,6 +63,7 @@ async def process_latest_support_ai_message(conversation_id: UUID) -> None:
             if messages:
                 await _process(session, conversation_id, messages[-1].id)
             await session.commit()
+            logger.info("support_ai_initial_processing_finished", extra={"conversation_id": str(conversation_id)})
         except Exception:
             await session.rollback()
             logger.exception("support_ai_processing_failed", extra={"conversation_id": str(conversation_id)})
@@ -57,29 +73,129 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
     conversations = ConversationRepository(session)
     conversation = await conversations.find_by_id(conversation_id)
     source = await session.get(MessageModel, source_message_id)
-    if conversation is None or source is None or conversation.conversation_type != "support":
+    if conversation is None:
+        logger.warning(
+            "support_ai_skipped",
+            extra={"conversation_id": str(conversation_id), "reason": "conversation_not_found"},
+        )
+        return
+    if source is None:
+        logger.warning(
+            "support_ai_skipped",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "reason": "source_message_not_found",
+            },
+        )
+        return
+    if conversation.conversation_type != "support":
+        logger.info(
+            "support_ai_skipped",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "reason": "not_support_conversation",
+            },
+        )
         return
     if ConversationState(conversation.state) not in {ConversationState.ACTIVE, ConversationState.CLOSING}:
+        logger.info(
+            "support_ai_skipped",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "reason": "conversation_state_not_processable",
+                "conversation_state": conversation.state,
+            },
+        )
         return
     case = await SupportCaseRepository(session).find_by_conversation(conversation_id)
-    if case is None or case.status in {"resolved", "closed"}:
+    if case is None:
+        logger.warning(
+            "support_ai_skipped",
+            extra={"conversation_id": str(conversation_id), "reason": "support_case_not_found"},
+        )
+        return
+    if case.status in {"resolved", "closed"}:
+        logger.info(
+            "support_ai_skipped",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "reason": "case_not_open",
+                "case_status": case.status,
+            },
+        )
         return
     participants = await conversations.participants_for(conversation_id)
-    if case.assigned_to_user_id is not None or any(
-        participant.role in {"support_agent", "admin"} for participant in participants
-    ):
+    human_roles = sorted(
+        {participant.role for participant in participants if participant.role in {"support_agent", "admin"}}
+    )
+    if case.assigned_to_user_id is not None:
+        logger.info(
+            "support_ai_skipped",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "reason": "case_assigned_to_human",
+            },
+        )
+        return
+    if human_roles:
+        logger.info(
+            "support_ai_skipped",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "reason": "human_participant_present",
+                "human_participant_roles": human_roles,
+            },
+        )
         return
 
     client = diddisupport_read_client()
+    logger.info(
+        "support_ai_history_fetch_started",
+        extra={"conversation_id": str(conversation_id), "source_message_id": str(source_message_id)},
+    )
     remote_history = await client.list_user_visible_messages(case.external_case_id)
     history = [
         message.body
         for message in remote_history
         if message.author_type not in {"ai", "assistant", "diddicomms"}
     ]
+    logger.info(
+        "support_ai_history_fetched",
+        extra={
+            "conversation_id": str(conversation_id),
+            "source_message_id": str(source_message_id),
+            "remote_message_count": len(remote_history),
+            "decision_history_count": len(history),
+        },
+    )
     try:
+        logger.info(
+            "support_ai_decision_started",
+            extra={"conversation_id": str(conversation_id), "source_message_id": str(source_message_id)},
+        )
         decision = await JevDecisionGate().classify(message=source.body, history=history[:-1])
+        logger.info(
+            "support_ai_decision_completed",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "route": decision.route,
+                "category": decision.category,
+                "confidence": decision.confidence,
+                "human_required": decision.human_required,
+            },
+        )
     except DecisionGateError:
+        logger.exception(
+            "support_ai_decision_failed",
+            extra={"conversation_id": str(conversation_id), "source_message_id": str(source_message_id)},
+        )
         await _send_reply(session, case.external_case_id, conversation, source, FALLBACK_REPLY, "needs_human")
         return
 
@@ -93,6 +209,14 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
         return
 
     try:
+        logger.info(
+            "support_ai_completion_started",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "category": decision.category,
+            },
+        )
         completion = await OpenRouterClient().complete(
             messages=[
                 {
@@ -108,7 +232,22 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
         )
         body = completion.content
         category = decision.category
+        logger.info(
+            "support_ai_completion_completed",
+            extra={
+                "conversation_id": str(conversation_id),
+                "source_message_id": str(source_message_id),
+                "model": completion.model,
+                "used_fallback": completion.used_fallback,
+                "prompt_tokens": completion.prompt_tokens,
+                "completion_tokens": completion.completion_tokens,
+            },
+        )
     except AIProviderError:
+        logger.exception(
+            "support_ai_completion_failed",
+            extra={"conversation_id": str(conversation_id), "source_message_id": str(source_message_id)},
+        )
         body = FALLBACK_REPLY
         category = "needs_human"
 
@@ -123,10 +262,29 @@ async def _send_reply(
     body: str,
     category: str,
 ) -> None:
+    logger.info(
+        "support_ai_message_write_started",
+        extra={
+            "conversation_id": str(conversation.id),
+            "source_message_id": str(source.id),
+            "case_id": str(case_id),
+            "category": category,
+        },
+    )
     remote_message = await diddisupport_read_client().send_ai_message(
         case_id=case_id,
         body=body,
         idempotency_key=f"ai-reply-{source.id}",
+    )
+    logger.info(
+        "support_ai_message_write_completed",
+        extra={
+            "conversation_id": str(conversation.id),
+            "source_message_id": str(source.id),
+            "case_id": str(case_id),
+            "remote_message_id": str(remote_message.message_id),
+            "author_type": remote_message.author_type,
+        },
     )
     AuditRecorder(session).add(
         AuditEventDraft(
