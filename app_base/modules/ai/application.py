@@ -60,7 +60,22 @@ async def process_latest_support_ai_message(conversation_id: UUID) -> None:
                 after_sequence=0,
                 limit=100,
             )
-            if messages:
+            if not messages:
+                logger.warning(
+                    "support_ai_skipped",
+                    extra={
+                        "conversation_id": str(conversation_id),
+                        "reason": "local_source_message_not_found",
+                    },
+                )
+            else:
+                logger.info(
+                    "support_ai_initial_message_loaded",
+                    extra={
+                        "conversation_id": str(conversation_id),
+                        "source_message_id": str(messages[-1].id),
+                    },
+                )
                 await _process(session, conversation_id, messages[-1].id)
             await session.commit()
             logger.info("support_ai_initial_processing_finished", extra={"conversation_id": str(conversation_id)})
