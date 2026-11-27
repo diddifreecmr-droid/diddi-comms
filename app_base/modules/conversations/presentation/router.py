@@ -57,6 +57,20 @@ from app_base.modules.support.factory import diddisupport_read_client
 from app_base.modules.support.read_client import SupportMessageResponse as RemoteSupportMessage
 
 logger = logging.getLogger(__name__)
+
+
+async def _commit_before_support_ai_task(session: AsyncSession, *, conversation_id: UUID, trigger: str) -> None:
+    """Make the source message visible before the async AI task starts.
+
+    FastAPI background tasks run before the database dependency is finalized.
+    Without an explicit commit here, the task opens a new session and can race
+    the request transaction, making a valid message look absent.
+    """
+    await session.commit()
+    logger.info(
+        "support_ai_source_committed",
+        extra={"conversation_id": str(conversation_id), "trigger": trigger},
+    )
 router = APIRouter(tags=["conversations"])
 
 SUPPORT_CASES_READ_SCOPE = "diddicomms:support-cases:read"
@@ -404,6 +418,11 @@ async def send_message(
     if result.created and settings.ai_enabled:
         from app_base.modules.ai.application import process_support_ai_message
 
+        await _commit_before_support_ai_task(
+            session,
+            conversation_id=conversation_id,
+            trigger="follow_up_message",
+        )
         logger.info(
             "support_ai_task_scheduled",
             extra={
@@ -830,6 +849,11 @@ async def open_support_case(
     if payload.initial_message and settings.ai_enabled:
         from app_base.modules.ai.application import process_latest_support_ai_message
 
+        await _commit_before_support_ai_task(
+            session,
+            conversation_id=result.conversation.id,
+            trigger="open_support_conversation",
+        )
         logger.info(
             "support_ai_task_scheduled",
             extra={"conversation_id": str(result.conversation.id), "trigger": "open_support_conversation"},
@@ -892,6 +916,11 @@ async def open_support_conversation(
     if payload.message and settings.ai_enabled:
         from app_base.modules.ai.application import process_latest_support_ai_message
 
+        await _commit_before_support_ai_task(
+            session,
+            conversation_id=result.conversation.id,
+            trigger="open_support_case",
+        )
         logger.info(
             "support_ai_task_scheduled",
             extra={"conversation_id": str(result.conversation.id), "trigger": "open_support_case"},
