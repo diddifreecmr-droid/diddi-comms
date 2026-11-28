@@ -53,6 +53,10 @@ class JevDecisionGate:
                         "needs_human": (
                             "The message concerns safety, sensitive account action, or requires human judgment."
                         ),
+                        "needs_clarification": (
+                            "The message is a genuine DiddiFree support request, but one or more user-provided "
+                            "facts are missing before the AI can answer safely. Ask only for those missing facts."
+                        ),
                     },
                 },
                 "category": {
@@ -128,6 +132,6 @@ class JevDecisionGate:
         )
         human_value = human_answer.get("noul", human_answer.get("value", False))
         human_required = human_value if isinstance(human_value, bool) else float(human_value) >= 0.5
-        if route not in {"support_allowed", "out_of_scope", "needs_human"}:
+        if route not in {"support_allowed", "out_of_scope", "needs_human", "needs_clarification"}:
             raise ValueError("invalid route")
         return DecisionGateResult(route, category, confidence, human_required)

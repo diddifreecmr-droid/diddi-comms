@@ -13,6 +13,10 @@ it must never be written using the user-message payload.
    `ai`, `support_agent`, and `admin`. Implemented in the public mapper.
 2. **AI response loop** — after a committed user message, run the decision gate
    and generate one asynchronous AI reply. Implemented in DiddiComms.
+   The decision gate distinguishes `support_allowed`, `needs_clarification`,
+   `needs_human`, and `out_of_scope`. Clarification prompts must request only
+   user-provided facts that are missing; linked task identifiers already known
+   by DiddiComms must not be requested from the user.
 3. **Support write contract** — send the reply to DiddiSupport with
    `author_type=ai`; fail closed until DiddiSupport enables the contract.
 4. **Context handoff** — publish an outbox event referencing the existing case,
@@ -45,6 +49,10 @@ The AI remains disabled by default with `AI_ENABLED=false`.
 - User messages and initial support messages schedule asynchronous AI work.
 - Jev remains the decision gate.
 - OpenRouter uses the configured primary model and fallback model.
+- `needs_clarification` generates one concise question through the existing AI
+  message contract; it does not create another case.
+- Known linked task references are included as internal prompt context and are
+  never requested from the user.
 - Human takeover and resolved/closed cases stop AI processing.
 
 ### Sprint 3 — DiddiSupport assistant-message contract — DONE

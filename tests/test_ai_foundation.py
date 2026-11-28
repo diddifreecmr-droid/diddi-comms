@@ -97,6 +97,7 @@ async def test_jev_uses_openrouter_alpha_decisions_path(monkeypatch) -> None:
     assert isinstance(transport.payload, dict)
     assert isinstance(transport.payload["questions"], dict)
     assert transport.payload["questions"]["route"]["criteria"]["support_allowed"]
+    assert transport.payload["questions"]["route"]["criteria"]["needs_clarification"]
 
 
 def test_jev_parser_reads_typed_answers() -> None:
@@ -130,6 +131,22 @@ def test_jev_parser_reads_decisions_api_answers() -> None:
     assert result.route == "support_allowed"
     assert result.category == "payment"
     assert result.confidence == 0.95
+    assert result.human_required is False
+
+
+def test_jev_parser_accepts_needs_clarification_route() -> None:
+    result = JevDecisionGate._parse(
+        {
+            "answers": {
+                "route": {"type": "choice", "choice": "needs_clarification", "confidence": 0.95},
+                "category": {"type": "choice", "choice": "delivery", "confidence": 0.91},
+                "human_required": {"type": "noul", "noul": 0.05},
+            },
+        }
+    )
+
+    assert result.route == "needs_clarification"
+    assert result.category == "delivery"
     assert result.human_required is False
 
 

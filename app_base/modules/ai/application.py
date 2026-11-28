@@ -214,13 +214,26 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
         await _send_reply(session, case.external_case_id, conversation, source, FALLBACK_REPLY, "needs_human")
         return
 
-    if decision.route != "support_allowed":
-        body = (
-            "I can help with Diddi support questions. Your message has been sent to our support team."
-            if decision.route == "needs_human"
-            else "I can only help with Diddi support questions. Please describe the issue you are experiencing."
+    if decision.route == "needs_human":
+        await _send_reply(
+            session,
+            case.external_case_id,
+            conversation,
+            source,
+            "I can help with Diddi support questions. Your message has been sent to our support team.",
+            decision.category,
         )
-        await _send_reply(session, case.external_case_id, conversation, source, body, decision.category)
+        return
+
+    if decision.route == "out_of_scope":
+        await _send_reply(
+            session,
+            case.external_case_id,
+            conversation,
+            source,
+            "I can only help with Diddi support questions. Please describe the issue you are experiencing.",
+            decision.category,
+        )
         return
 
     try:
@@ -236,9 +249,9 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "You are the DiddiComms support assistant. Answer only about the user's support request. "
-                        "Do not act as a general chatbot. Ask concise clarifying questions when needed."
+                    "content": _support_ai_system_prompt(
+                        case=case,
+                        clarification=decision.route == "needs_clarification",
                     ),
                 },
                 *({"role": "user", "content": text} for text in history[-settings.decision_gate_history_messages :]),
@@ -267,6 +280,31 @@ async def _process(session: AsyncSession, conversation_id: UUID, source_message_
         category = "needs_human"
 
     await _send_reply(session, case.external_case_id, conversation, source, body, category)
+
+
+def _support_ai_system_prompt(*, case, clarification: bool) -> str:
+    known_context = "No linked business task is available."
+    if case.owner_service and case.task_type and case.task_id:
+        known_context = (
+            "The case is already linked internally to "
+            f"owner_service={case.owner_service}, task_type={case.task_type}, task_id={case.task_id}. "
+            "Never ask the user to provide or repeat these identifiers."
+        )
+
+    if clarification:
+        return (
+            "You are the DiddiComms support assistant. This is a DiddiFree support conversation, not a general "
+            "chatbot. Ask one concise clarifying question only when a user-provided fact is missing. "
+            "Do not ask for identifiers or business context already available internally. Do not invent facts. "
+            "Do not promise an action you cannot perform.\n\n"
+            f"Known internal context: {known_context}"
+        )
+    return (
+        "You are the DiddiComms support assistant. Answer only about the user's DiddiFree support request. "
+        "Do not act as a general chatbot. Ask concise clarifying questions only for user-provided facts that are "
+        "actually missing; never ask for identifiers or business context already available internally. Do not "
+        f"invent facts.\n\nKnown internal context: {known_context}"
+    )
 
 
 async def _send_reply(
