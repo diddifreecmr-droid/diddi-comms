@@ -16,6 +16,26 @@ class JsonTransport(httpx.AsyncBaseTransport):
         return httpx.Response(200, json=self.payload, request=request)
 
 
+class RecordingDecisionTransport(httpx.AsyncBaseTransport):
+    def __init__(self) -> None:
+        self.url: httpx.URL | None = None
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.url = request.url
+        return httpx.Response(
+            200,
+            json={
+                "confidence": 0.95,
+                "answers": {
+                    "route": {"value": "support_allowed"},
+                    "category": {"value": "general"},
+                    "human_required": {"value": False},
+                },
+            },
+            request=request,
+        )
+
+
 class FallbackTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/chat/completions") and request.content:
@@ -55,6 +75,22 @@ async def test_openrouter_uses_fallback_model(monkeypatch) -> None:
 
     assert result.content == "Fallback"
     assert result.used_fallback is True
+
+
+@pytest.mark.asyncio
+async def test_jev_uses_openrouter_alpha_decisions_path(monkeypatch) -> None:
+    monkeypatch.setattr("app_base.modules.ai.decision_gate.settings.openrouter_api_key", "test-key")
+    monkeypatch.setattr(
+        "app_base.modules.ai.decision_gate.settings.openrouter_base_url",
+        "https://openrouter.ai/api/v1",
+    )
+    transport = RecordingDecisionTransport()
+
+    result = await JevDecisionGate(transport=transport).classify(message="I need help")
+
+    assert result.route == "support_allowed"
+    assert transport.url is not None
+    assert str(transport.url) == "https://openrouter.ai/api/alpha/decisions"
 
 
 def test_jev_parser_reads_typed_answers() -> None:

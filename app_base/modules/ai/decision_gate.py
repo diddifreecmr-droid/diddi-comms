@@ -76,7 +76,7 @@ class JevDecisionGate:
                 transport=self.transport,
             ) as client:
                 response = await client.post(
-                    "/../api/alpha/decisions",
+                    "../alpha/decisions",
                     json=payload,
                     headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
                 )
