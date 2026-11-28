@@ -41,29 +41,47 @@ class JevDecisionGate:
         payload = {
             "model": settings.jev_model,
             "state": state,
-            "questions": [
-                {
-                    "id": "route",
+            "questions": {
+                "route": {
                     "type": "choice",
-                    "options": ["support_allowed", "out_of_scope", "needs_human"],
+                    "instructions": "Which support route should handle this message?",
+                    "criteria": {
+                        "support_allowed": "The message is a genuine DiddiFree support request or follow-up.",
+                        "out_of_scope": (
+                            "The message is a general-purpose chatbot request unrelated to DiddiFree support."
+                        ),
+                        "needs_human": (
+                            "The message concerns safety, sensitive account action, or requires human judgment."
+                        ),
+                    },
                 },
-                {
-                    "id": "category",
+                "category": {
                     "type": "choice",
-                    "options": [
-                        "general",
-                        "account",
-                        "payment",
-                        "ride",
-                        "delivery",
-                        "order",
-                        "safety",
-                        "technical",
-                        "other",
-                    ],
+                    "instructions": "Which support category best describes the user's message?",
+                    "criteria": {
+                        "general": "General support or a complaint that does not fit another category.",
+                        "account": "Account, profile, identity, or access problem.",
+                        "payment": "Payment, charge, refund, balance, or transaction problem.",
+                        "ride": "Ride, driver, or passenger problem.",
+                        "delivery": "Delivery, courier, or package problem.",
+                        "order": "Food, shop, order, or merchant problem.",
+                        "safety": "Safety concern, threat, abuse, or urgent risk.",
+                        "technical": "Technical problem with the DiddiFree application or service.",
+                        "other": "A DiddiFree support request that does not fit the listed categories.",
+                    },
                 },
-                {"id": "human_required", "type": "boolean"},
-            ],
+                "human_required": {
+                    "type": "noul",
+                    "instructions": "Does this message require a human support agent to review it?",
+                    "criteria": {
+                        "true": (
+                            "The request needs human judgment, a sensitive action, or cannot be safely "
+                            "handled by the AI."
+                        ),
+                        "false": "The AI can safely provide an informational support response.",
+                    },
+                },
+            },
         }
         logger.info(
             "ai_decision_request_started",
@@ -97,10 +115,19 @@ class JevDecisionGate:
     @staticmethod
     def _parse(data: dict[str, Any]) -> DecisionGateResult:
         answers = data["answers"]
-        route = str(answers["route"]["value"])
-        category = str(answers["category"]["value"])
-        confidence = float(data.get("confidence", answers["route"].get("probability", 0)))
-        human_required = bool(answers["human_required"]["value"])
+        route_answer = answers["route"]
+        category_answer = answers["category"]
+        human_answer = answers["human_required"]
+        route = str(route_answer.get("choice", route_answer.get("value")))
+        category = str(category_answer.get("choice", category_answer.get("value")))
+        confidence = float(
+            data.get(
+                "confidence",
+                route_answer.get("confidence", route_answer.get("probability", 0)),
+            )
+        )
+        human_value = human_answer.get("noul", human_answer.get("value", False))
+        human_required = human_value if isinstance(human_value, bool) else float(human_value) >= 0.5
         if route not in {"support_allowed", "out_of_scope", "needs_human"}:
             raise ValueError("invalid route")
         return DecisionGateResult(route, category, confidence, human_required)

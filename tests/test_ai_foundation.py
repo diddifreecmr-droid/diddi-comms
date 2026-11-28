@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -19,17 +21,18 @@ class JsonTransport(httpx.AsyncBaseTransport):
 class RecordingDecisionTransport(httpx.AsyncBaseTransport):
     def __init__(self) -> None:
         self.url: httpx.URL | None = None
+        self.payload: dict | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.url = request.url
+        self.payload = json.loads(request.content)
         return httpx.Response(
             200,
             json={
-                "confidence": 0.95,
                 "answers": {
-                    "route": {"value": "support_allowed"},
-                    "category": {"value": "general"},
-                    "human_required": {"value": False},
+                    "route": {"type": "choice", "choice": "support_allowed", "confidence": 0.95},
+                    "category": {"type": "choice", "choice": "general", "confidence": 0.95},
+                    "human_required": {"type": "noul", "noul": 0.05},
                 },
             },
             request=request,
@@ -91,6 +94,9 @@ async def test_jev_uses_openrouter_alpha_decisions_path(monkeypatch) -> None:
     assert result.route == "support_allowed"
     assert transport.url is not None
     assert str(transport.url) == "https://openrouter.ai/api/alpha/decisions"
+    assert isinstance(transport.payload, dict)
+    assert isinstance(transport.payload["questions"], dict)
+    assert transport.payload["questions"]["route"]["criteria"]["support_allowed"]
 
 
 def test_jev_parser_reads_typed_answers() -> None:
@@ -108,6 +114,23 @@ def test_jev_parser_reads_typed_answers() -> None:
     assert result.route == "support_allowed"
     assert result.category == "payment"
     assert result.confidence == 0.95
+
+
+def test_jev_parser_reads_decisions_api_answers() -> None:
+    result = JevDecisionGate._parse(
+        {
+            "answers": {
+                "route": {"type": "choice", "choice": "support_allowed", "confidence": 0.95},
+                "category": {"type": "choice", "choice": "payment", "confidence": 0.91},
+                "human_required": {"type": "noul", "noul": 0.1},
+            },
+        }
+    )
+
+    assert result.route == "support_allowed"
+    assert result.category == "payment"
+    assert result.confidence == 0.95
+    assert result.human_required is False
 
 
 def test_support_sender_attribution_includes_ai_and_admin() -> None:
